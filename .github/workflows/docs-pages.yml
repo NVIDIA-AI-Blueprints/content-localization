@@ -27,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install documentation dependencies
         run: |
@@ -37,8 +37,8 @@ jobs:
 
       - name: Build Sphinx documentation
         env:
-          PYTHONPATH: ${{ env.PYTHONPATH }}:${{ github.workspace }}/protos/generated
-        run: sh docs/build_docs.sh
+          PYTHONPATH: ${{ github.workspace }}/protos/generated
+        run: bash docs/build_docs.sh
 
       - name: Prepare Pages artifact content
         run: |
