@@ -6,8 +6,12 @@
 import time
 import unittest
 
+import pytest
+
 from common.buffers import Buffer
 from common.deserializer import Deserializer
+
+pytestmark = pytest.mark.unit
 
 
 class _IntDeserializer(Deserializer[int]):

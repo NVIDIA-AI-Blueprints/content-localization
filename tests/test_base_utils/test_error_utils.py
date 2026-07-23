@@ -5,9 +5,11 @@
 
 import pytest
 
-from base_utils import FileSizeError
-from base_utils import ServiceConfigurationError
-from base_utils import SSLConfigurationError
+from common.base_utils import FileSizeError
+from common.base_utils import ServiceConfigurationError
+from common.base_utils import SSLConfigurationError
+
+pytestmark = pytest.mark.unit
 
 
 class TestFileSizeError:

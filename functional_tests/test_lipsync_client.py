@@ -12,10 +12,8 @@ This test runs the actual LipSync client and validates the lip-sync pipeline:
 4. Verifies lip-sync functionality
 """
 
-import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -26,42 +24,44 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from client.lipsync.args import argsfactory
-from client.utils import check_service_health
+from common.health import check_service_health
+
+pytestmark = pytest.mark.functional
+
+# Live services this module exercises. The autouse conftest fixture probes
+# each address and skips the whole module when any service is unreachable.
+REQUIRED_SERVICES = (("LipSync", "localhost:50054"),)
 
 
-def test_lipsync_service_health():
-    """Check if the LipSync service is running and healthy."""
-    print("Checking LipSync service health...")
-    try:
-        check_service_health("localhost:50054")
-        print("OK: LipSync service is healthy")
-        return True
-    except Exception as e:
-        pytest.fail(f"ERROR: LipSync service not available: {e}")
+def test_lipsync_service_health() -> None:
+    """The LipSync service answers the standard gRPC health probe.
+
+    Examples:
+        >>> test_lipsync_service_health()  # doctest: +SKIP
+    """
+    assert check_service_health(server="localhost:50054") is True
 
 
-def test_input_files_exist():
-    """Check if required input files exist."""
-    print("Checking input files...")
+def test_input_files_exist() -> None:
+    """The sample audio and video inputs used by the client exist.
 
-    project_root = Path(__file__).parent.parent
+    Examples:
+        >>> test_input_files_exist()  # doctest: +SKIP
+    """
     defaults = argsfactory().parse_args([])
-    audio_file = project_root / defaults.audio_input
-    video_file = project_root / defaults.video_input
+    audio_file = project_root / defaults.input_audio
+    video_file = project_root / defaults.input_mp4
 
-    if not audio_file.exists():
-        pytest.fail(f"ERROR: Audio file not found: {audio_file}")
-
-    if not video_file.exists():
-        pytest.fail(f"ERROR: Video file not found: {video_file}")
-
-    print(f"OK: Audio file found: {audio_file}")
-    print(f"OK: Video file found: {video_file}")
-    return True
+    assert audio_file.exists(), f"Audio file not found: {audio_file}"
+    assert video_file.exists(), f"Video file not found: {video_file}"
 
 
-def cleanup_previous_outputs():
-    """Clean up any previous test outputs."""
+def cleanup_previous_outputs() -> None:
+    """Clean up any previous test outputs.
+
+    Examples:
+        >>> cleanup_previous_outputs()  # doctest: +SKIP
+    """
     outputs_dir = Path(__file__).parent / "outputs"
     if outputs_dir.exists():
         for file in outputs_dir.glob("lipsync_*"):
@@ -72,102 +72,76 @@ def cleanup_previous_outputs():
                 print(f"WARNING: Could not clean up {file.name}: {e}")
 
 
-def test_lipsync_client_comprehensive():
-    """Comprehensive LipSync client test covering basic and complex functionality."""
-    print("\nStarting comprehensive LipSync client test...")
+def test_lipsync_client_comprehensive(client_subprocess_env: dict[str, str]) -> None:
+    """Run the LipSync client end to end and validate the MP4 output.
 
-    # Clean up previous outputs
+    Examples:
+        >>> test_lipsync_client_comprehensive()  # doctest: +SKIP
+    """
     cleanup_previous_outputs()
 
-    # Create outputs directory
     outputs_dir = Path(__file__).parent / "outputs"
     outputs_dir.mkdir(exist_ok=True)
     output_file = outputs_dir / "lipsync_comprehensive_output.mp4"
 
-    # Get input file paths
-    project_root = Path(__file__).parent.parent
     defaults = argsfactory().parse_args([])
-    audio_file = project_root / defaults.audio_input
-    video_file = project_root / defaults.video_input
+    audio_file = project_root / defaults.input_audio
+    video_file = project_root / defaults.input_mp4
 
     # Build command with optimized parameters
     cmd = [
         sys.executable,
         "client/lipsync/app.py",
-        "--target",
+        "--lipsync-server",
         "localhost:50054",
-        "--audio-input",
+        "--input-audio",
         str(audio_file),
-        "--video-input",
+        "--input-mp4",
         str(video_file),
-        "--output",
+        "--output-mp4",
         str(output_file),
     ]
 
     print(f"Running comprehensive LipSync test: {' '.join(cmd)}")
 
-    # Run the LipSync client
     start_time = time.time()
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minute timeout
-        )
-        end_time = time.time()
-        processing_time = end_time - start_time
+    result = subprocess.run(
+        cmd,
+        env=client_subprocess_env,
+        capture_output=True,
+        text=True,
+        timeout=600,  # 10 minute timeout
+        check=False,
+    )
+    processing_time = time.time() - start_time
 
-        if result.returncode != 0:
-            pytest.fail(
-                f"ERROR: LipSync client failed with return code: {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
-            )
+    assert result.returncode == 0, (
+        f"LipSync client failed with return code {result.returncode}\n"
+        f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+    )
+    print(f"OK: LipSync client completed successfully in {processing_time:.2f} seconds")
 
-        print(f"OK: LipSync client completed successfully in {processing_time:.2f} seconds")
-        print(f"STDOUT: {result.stdout}")
+    assert output_file.exists(), f"Output file not created: {output_file}"
+    assert output_file.stat().st_size > 0, f"Output file is empty: {output_file}"
 
-        # Validate output
-        if not output_file.exists():
-            pytest.fail(f"ERROR: Output file not created: {output_file}")
+    # Validate MP4 format and content
+    with open(output_file, "rb") as f:
+        header = f.read(12)
+    assert len(header) >= 8, f"Output file too small: {len(header)} bytes"
 
-        if output_file.stat().st_size == 0:
-            pytest.fail(f"ERROR: Output file is empty: {output_file}")
+    # Check for MP4 signature patterns
+    is_valid_mp4 = (
+        header[4:8] == b"ftyp"  # ftyp atom
+        or header[4:8] == b"moov"  # moov atom
+        or header[4:8] == b"mdat"  # mdat atom
+    )
+    assert is_valid_mp4, f"Output file is not valid MP4, header: {header!r}"
 
-        # Validate MP4 format and content
-        with open(output_file, "rb") as f:
-            header = f.read(12)
-            if len(header) < 8:
-                pytest.fail(f"ERROR: Output file too small: {len(header)} bytes")
+    # Check file size is reasonable (lip-sync output is often highly compressed)
+    input_video_size = video_file.stat().st_size
+    output_size = output_file.stat().st_size
+    assert output_size >= input_video_size * 0.1, (
+        f"Output file seems too small: {output_size} bytes (input: {input_video_size} bytes)"
+    )
 
-            # Check for MP4 signature patterns
-            is_valid_mp4 = (
-                header[4:8] == b"ftyp"  # ftyp atom
-                or header[4:8] == b"moov"  # moov atom
-                or header[4:8] == b"mdat"  # mdat atom
-            )
-
-            if not is_valid_mp4:
-                pytest.fail(f"ERROR: Output file is not valid MP4, header: {header}")
-
-        # Check file size is reasonable (lip-sync output is often highly compressed)
-        input_video_size = video_file.stat().st_size
-        output_size = output_file.stat().st_size
-
-        if output_size < input_video_size * 0.1:  # Allow for heavy compression
-            pytest.fail(
-                f"ERROR: Output file seems too small: {output_size} bytes (input: {input_video_size} bytes)"
-            )
-
-        print(f"OK: Output file created successfully: {output_file}")
-        print(f"OK: Output file size: {output_size} bytes")
-        print(f"OK: Output file is valid MP4 format")
-        print(f"OK: File size validation passed (input: {input_video_size}, output: {output_size})")
-        print(f"OK: Comprehensive LipSync test completed successfully")
-
-    except subprocess.TimeoutExpired:
-        pytest.fail("ERROR: LipSync client timed out after 5 minutes")
-    except Exception as e:
-        pytest.fail(f"ERROR: LipSync client failed with exception: {e}")
-
-
-# Pytest will automatically discover and run all test_* functions
+    print(f"OK: Output file is valid MP4 format ({output_size} bytes): {output_file}")

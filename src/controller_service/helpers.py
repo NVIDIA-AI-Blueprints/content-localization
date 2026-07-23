@@ -9,7 +9,7 @@ import queue as queue_module
 from nvidia.ai4m.audio.v1.audio_pb2 import AUDIO_CODEC_MP3
 from nvidia.ai4m.audio.v1.audio_pb2 import AUDIO_CODEC_WAV
 
-from base_utils import logger
+from common.base_utils import logger
 from common.buffers import Buffer
 
 _CODEC_TO_FORMAT = {AUDIO_CODEC_WAV: "WAV", AUDIO_CODEC_MP3: "MP3"}
@@ -17,8 +17,7 @@ _FORMAT_TO_CODEC = {"WAV": AUDIO_CODEC_WAV, "MP3": AUDIO_CODEC_MP3}
 
 _S2S_OUTPUT_FORMAT: dict[str, str] = {
     "EL_DUBBING": "MP3",
-    "CAMB_DUBBING": "WAV",
-    "RIVA_TRANSACTIONAL": "WAV",
+    "CAMB_DUBBING": "MP3",
 }
 
 # Seconds to wait for each per-request config message (controller_config,
@@ -53,7 +52,7 @@ def _audio_codec_to_format_string(codec: int) -> str:
 def _extract_config(
     buffer: Buffer,
     field_name: str,
-    timeout: float = CONFIG_POLL_TIMEOUT,
+    timeout: float | None = None,
 ) -> object | None:
     """Read a single config message from a 1-queue buffer.
 
@@ -65,9 +64,9 @@ def _extract_config(
             one config.
         field_name (str): Protobuf field name to extract
             (e.g. ``"asd_config"``).
-        timeout (float): Maximum seconds to wait. Defaults to
-            :data:`CONFIG_POLL_TIMEOUT` (env ``CONTROLLER_CONFIG_POLL_TIMEOUT``,
-            default ``5.0``).
+        timeout (float | None): Maximum seconds to wait. ``None`` (default)
+            uses the current :data:`CONFIG_POLL_TIMEOUT`
+            (env ``CONTROLLER_CONFIG_POLL_TIMEOUT``, default ``5.0``).
 
     Returns:
         object | None: The extracted config protobuf message, or
@@ -82,6 +81,8 @@ def _extract_config(
         ...     timeout=1.0,
         ... )  # returns None (empty)
     """
+    if timeout is None:
+        timeout = CONFIG_POLL_TIMEOUT
     try:
         req = buffer.get(consumer_id=0, timeout=timeout)
         if req.HasField(field_name):

@@ -3,13 +3,12 @@
 
 """Pytest configuration and shared fixtures for base_utils tests."""
 
-import os
 import tempfile
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 
-from base_utils import GRPCServiceBase
+from common.base_utils import GRPCServiceBase
 
 
 @pytest.fixture

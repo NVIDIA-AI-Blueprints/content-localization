@@ -67,9 +67,13 @@ from copy import deepcopy
 
 from nvidia.ai4m.controller.v1.controller_pb2 import ContentLocalizationRequest
 
-from base_utils import logger
+from common.base_utils import logger
 from common.buffers import Buffer
 from common.deserializer import Deserializer
+
+# Cap on distinct conflicting request_ids remembered for warning dedup, so a
+# client stamping a fresh id on every chunk cannot grow the set unboundedly.
+_MAX_WARNED_REQUEST_IDS = 100
 
 
 class VideoQueueConsumer:
@@ -113,6 +117,9 @@ class ContentLocalizationDeserializer(Deserializer[ContentLocalizationRequest]):
             (1 queue, bypasses S2S when present).
         controller_config_buffer: Buffer holding controller config packets
             (1 queue, e.g. bypass_s2s flag).
+        client_request_id: First client-supplied request_id seen on the
+            stream; echoed in responses. Empty when the client sends none.
+            Differing ids arriving later are ignored with a warning.
     """
 
     def __init__(
@@ -140,9 +147,73 @@ class ContentLocalizationDeserializer(Deserializer[ContentLocalizationRequest]):
         self.translated_audio_buffer: Buffer[ContentLocalizationRequest] = Buffer(num_queues=1)
         self.controller_config_buffer: Buffer[ContentLocalizationRequest] = Buffer(num_queues=1)
 
+        # First client-supplied request_id seen on the stream; echoed in
+        # responses so clients can correlate them with their requests.
+        self.client_request_id: str = ""
+
+        # Conflicting ids already warned about. Clients may stamp every
+        # chunk, so warning once per distinct id keeps logs bounded; the
+        # cap keeps the set bounded against ever-changing ids.
+        self._warned_request_ids: set[str] = set()
+
         logger.debug("ContentLocalizationDeserializer initialised")
 
+    def named_buffers(self) -> dict[str, Buffer[ContentLocalizationRequest]]:
+        """Return the output buffers keyed by their attribute names.
+
+        Returns:
+            dict[str, Buffer[ContentLocalizationRequest]]: Mapping of buffer
+                name to buffer, covering every buffer this deserializer
+                routes into.
+
+        Examples:
+            >>> sorted(deserializer.named_buffers())[:2]  # doctest: +SKIP
+            ['asd_config_buffer', 'audio_buffer']
+        """
+        return {
+            "audio_buffer": self.audio_buffer,
+            "s2s_config_buffer": self.s2s_config_buffer,
+            "asd_config_buffer": self.asd_config_buffer,
+            "lipsync_config_buffer": self.lipsync_config_buffer,
+            "video_buffer": self.video_buffer,
+            "diarization_buffer": self.diarization_buffer,
+            "background_audio_buffer": self.background_audio_buffer,
+            "translated_audio_buffer": self.translated_audio_buffer,
+            "controller_config_buffer": self.controller_config_buffer,
+        }
+
     # -- routing logic ---------------------------------------------------
+
+    def _capture_request_id(self, request: ContentLocalizationRequest) -> None:
+        """Record the first client-supplied request_id seen on the stream.
+
+        Later requests carrying a different id are ignored so responses stay
+        correlated with a single id; each distinct conflicting id is logged
+        once as a warning.
+
+        Args:
+            request: The incoming gRPC request packet.
+
+        Returns:
+            None
+
+        Examples:
+            >>> deserializer._capture_request_id(request=request)  # doctest: +SKIP
+        """
+        if not request.HasField("request_id"):
+            return
+        if not self.client_request_id:
+            self.client_request_id = request.request_id
+        elif (
+            request.request_id != self.client_request_id
+            and request.request_id not in self._warned_request_ids
+            and len(self._warned_request_ids) < _MAX_WARNED_REQUEST_IDS
+        ):
+            self._warned_request_ids.add(request.request_id)
+            logger.warning(
+                f"Ignoring request_id {request.request_id!r} received mid-stream; "
+                f"responses keep the first id {self.client_request_id!r}"
+            )
 
     def _distribute(self, request: ContentLocalizationRequest) -> None:
         """Route a single ``ContentLocalizationRequest`` to the correct buffers.
@@ -160,6 +231,12 @@ class ContentLocalizationDeserializer(Deserializer[ContentLocalizationRequest]):
         Args:
             request: The incoming gRPC request packet.
         """
+        self._capture_request_id(request=request)
+
+        if request.WhichOneof("payload") is None:
+            logger.warning("Request message carries no payload field; ignoring")
+            return
+
         if request.HasField("s2s_config"):
             self.s2s_config_buffer.put(request)
             logger.debug("Deserialized s2s_config packet into s2s_config_buffer")

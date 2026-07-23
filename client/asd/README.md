@@ -35,7 +35,7 @@ python client/asd/app.py \
     --input-mp4 assets/sample_video_streamable.mp4 \
     --input-audio assets/sample_audio.wav \
     --diarization-file assets/diarization.json \
-    --diarization-format elevenlabs \
+    --diarization-format elevenlabs-scribe \
     --asd-server localhost:50055 \
     --output-speaker-info assets/asd_speaker_info.csv \
     --chunk-size-video-bytes 32768 \
@@ -47,13 +47,13 @@ python client/asd/app.py \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--asd-server` | `localhost:50055` | Address and port of the ASD NIM gRPC service |
-| `--input-mp4` | `assets/sample_video_streamable.mp4` | Path to input video file (streamable MP4 only) |
+| `--input-mp4` | `assets/sample_video_streamable.mp4` | Path to input video file (MP4; streamable MP4 recommended) |
 | `--input-audio` | `assets/sample_audio.wav` | Path to input audio file (WAV by default; MP3 allowed with `--asd-input-audio-codec MP3`) |
 | `--chunk-size-video-bytes` | `1048576` (1 MB) | Chunk size for streaming video |
 | `--chunk-size-audio-secs` | `1.0` | Chunk size for streaming audio in seconds |
 | `--output-speaker-info` | `assets/asd_speaker_info.csv` | Path to output speaker info file (CSV format) |
 | `--diarization-file` | `None` | Optional diarization JSON/CSV file for speaker segments |
-| `--diarization-format` | `elevenlabs` | Diarization format (`flat`, `riva`, `elevenlabs`, `elevenlabs-studio`, `camb`) |
+| `--diarization-format` | `elevenlabs-scribe` | Diarization format (`flat`, `elevenlabs-scribe`, `elevenlabs-dubbing-api`, `elevenlabs-studio`, `camb`) |
 
 ## Diarization
 
@@ -69,38 +69,50 @@ Use it with the default sample video:
 ```bash
 python client/asd/app.py \
     --diarization-file assets/diarization.json \
-    --diarization-format elevenlabs
+    --diarization-format elevenlabs-scribe
 ```
 
 ### Supported Diarization Formats
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| ElevenLabs | `elevenlabs` | Native ElevenLabs STT JSON with word-level timestamps and speaker IDs |
+| ElevenLabs Scribe | `elevenlabs-scribe` | Native ElevenLabs STT (Scribe) JSON with word-level timestamps and speaker IDs |
+| ElevenLabs Dubbing API | `elevenlabs-dubbing-api` | JSON from the ElevenLabs Dubbing Transcript API (`language`, `utterances[]`) |
 | ElevenLabs Studio | `elevenlabs-studio` | CSV export from ElevenLabs Dubbing Studio (`speaker`, `start_time`, `end_time`, `transcription`) |
-| RIVA | `riva` | Native RIVA ASR diarization JSON (`results[].alternatives[].words[]`) |
-| Camb AI | `camb` | Camb AI transcription JSON with segment-level speaker labels |
+| Camb AI | `camb` | Camb AI transcription (source language, via `scripts/camb/diarize.py`) or dubbing (target language only, via `scripts/camb/s2s_infer.py`) JSON with segment-level speaker labels |
 | Flat | `flat` | Simple JSON list with `start_time`, `end_time`, `speaker_id`, and optional `word`/`language_code` |
+
+See [docs/source/diarization_formats.rst](../../docs/source/diarization_formats.rst) for a side-by-side comparison of schema fields, time units, and speaker-label conventions.
 
 ### Generating Diarization Data
 
 Several helper scripts are provided to generate diarization files from external STT/ASR services:
 
-- `scripts/el_diarize.py` — Generate diarization using the ElevenLabs STT API
-- `scripts/riva_parakeet_diarize.py` — Generate diarization using the RIVA Parakeet ASR NIM
-- `scripts/camb_diarize.py` — Generate diarization using the Camb AI transcription API
+- `scripts/elevenlabs/diarize.py` — Generate diarization using the ElevenLabs Scribe STT API
+- `scripts/elevenlabs/s2s_infer.py` — Generate ElevenLabs Dubbing API transcripts with
+  `--transcript-format json`; consume them with `--diarization-format elevenlabs-dubbing-api`
+- `scripts/camb/diarize.py` — Generate **source-language** diarization using the Camb AI
+  Transcription API (use this for ASD)
+- `scripts/camb/s2s_infer.py` — With `--target-transcript-output-file --transcript-format json`,
+  emits a `camb`-format JSON transcript in the **target language only**
+  (Camb AI's dubbing API does not return a source-language transcript).
+  Useful for downstream display/captioning, **not** as ASD diarization input.
 
 ## Output Format
 
 The client outputs a CSV file with the following columns:
 
-- `chunk`: The video chunk number
+- `frame_id`: The video frame index
 - `x`: X coordinate of the speaker bounding box
-- `y`: Y coordinate of the speaker bounding box  
+- `y`: Y coordinate of the speaker bounding box
 - `width`: Width of the speaker bounding box
 - `height`: Height of the speaker bounding box
+- `diarized_speaker_id`: Speaker ID associated with the detected face (from diarization)
+- `face_id`: Tracked face identifier
+- `is_speaking`: Whether the face is actively speaking
+- `face_detection_confidence`: Confidence score for the face detection
 
-If no speaker is detected in a chunk, the coordinates will be (0, 0, 0, 0).
+If no speaker is detected in a frame, the bounding box coordinates will be (0, 0, 0, 0).
 
 ## Requirements
 
@@ -136,4 +148,4 @@ speaker info data it produces can be used by:
 1. **Service not found**: Ensure the ASD NIM service is running on the specified port
 2. **Video format issues**: Convert your video to streamable MP4 format using the provided script
 3. **Permission errors**: Ensure you have write permissions for the output directory
-4. **Memory issues**: Try reducing the chunk size if processing large videos 
+4. **Memory issues**: Try reducing the chunk size if processing large videos

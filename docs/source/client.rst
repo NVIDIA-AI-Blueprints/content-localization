@@ -84,7 +84,7 @@ Before running any client:
 
    .. code-block:: bash
 
-       scripts/convert_to_streamable_mp4.sh input.mp4
+       scripts/misc/convert_to_streamable_mp4.sh input.mp4
 
 Starting Services
 ~~~~~~~~~~~~~~~~~
@@ -117,6 +117,12 @@ Starting Services
 Configuration Options
 ---------------------
 
+.. note::
+
+   The lists below are a curated summary. For the complete, always-current set
+   of options for every client (generated directly from the ``argsfactory``
+   argument parsers), see :doc:`cli_reference`.
+
 Controller Client Arguments
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -127,10 +133,10 @@ Controller Client Arguments
 - ``--chunk-size-video-bytes``: Video chunk size in bytes (default: 1 MB)
 - ``--output-mp4``: Output MP4 video file path (default: outputs/controller_output.mp4)
 - ``--source-language``: Source language code (default: en)
-- ``--target-language``: Target language code (default: de). When using the RIVA
-  Magpie Multilingual TTS model, only ``en-US`` is supported as an output language.
+- ``--target-language``: Target language code (default: de)
+- ``--voice-name``: Voice name for TTS (optional)
 - ``--diarization-file``: Path to JSON diarization file for speaker segments (optional)
-- ``--diarization-format``: Format of the diarization file (choices: flat, riva, elevenlabs, elevenlabs-studio, camb; default: elevenlabs)
+- ``--diarization-format``: Format of the diarization file (choices: flat, elevenlabs-scribe, elevenlabs-dubbing-api, elevenlabs-studio, camb; default: elevenlabs-scribe). See :doc:`diarization_formats` for a comparison.
 - ``--bypass-asd``: Bypass ASD NIM (Active Speaker Detection); LipSync uses internal face detection
 - ``--background-audio-input``: Path to background audio file for mixing (optional)
 - ``--translated-audio``: Path to pre-translated audio file to bypass S2S (optional)
@@ -138,7 +144,7 @@ Controller Client Arguments
 
 .. note::
 
-   The Controller client also accepts all S2S (``--elevenlabs-*``, ``--s2s-*``),
+   The Controller client also accepts all S2S (``--elevenlabs-*``, ``--camb-*``),
    ASD (``--asd-*``), and LipSync (``--lipsync-*``) config arguments.
    Run ``python client/controller/app.py --help`` for the full list.
 
@@ -153,19 +159,18 @@ Direct Client Arguments
 - ``--translated-audio``: Path to pre-translated audio file to bypass S2S (optional)
 - ``--input-mp4``: Input MP4 video file path (default: assets/sample_video_streamable.mp4)
 - ``--output-mp4``: Output MP4 video file path (default: outputs/direct_output.mp4)
-- ``--output-speaker-info``: Output speaker info CSV file path (default: assets/asd_speaker_info.csv)
 - ``--chunk-size-audio-secs``: Audio chunk duration in seconds (default: 1.0)
 - ``--chunk-size-video-bytes``: Video chunk size in bytes (default: 1 MB)
-- ``--latency-plot``: Path for latency analysis plot (default: outputs/latency.png)
 - ``--bypass-asd``: Bypass ASD NIM (Active Speaker Detection); LipSync uses internal face detection
 - ``--diarization-file``: Path to JSON diarization file for speaker segments (optional)
-- ``--diarization-format``: Format of the diarization file (choices: flat, riva, elevenlabs, elevenlabs-studio, camb; default: elevenlabs)
+- ``--diarization-format``: Format of the diarization file (choices: flat, elevenlabs-scribe, elevenlabs-dubbing-api, elevenlabs-studio, camb; default: elevenlabs-scribe). See :doc:`diarization_formats` for a comparison.
 - ``--background-audio-input``: Path to background audio file for mixing (optional)
 
 .. note::
 
-   The Direct client also accepts all S2S (``--elevenlabs-*``, ``--s2s-*``),
-   ASD (``--asd-*``), and LipSync (``--lipsync-*``) config arguments.
+   The Direct client also accepts all S2S (``--source-language``, ``--target-language``,
+   ``--voice-name``, ``--elevenlabs-*``, ``--camb-*``), ASD (``--asd-*``), and LipSync
+   (``--lipsync-*``) config arguments.
    Run ``python client/direct/app.py --help`` for the full list.
 
 S2S Client Arguments
@@ -177,8 +182,8 @@ S2S Client Arguments
 - ``--chunk-size-audio-secs``: Audio chunk duration in seconds (default: 1.0)
 - ``--latency-plot``: Path for latency analysis plot (default: outputs/latency.png)
 - ``--source-language``: Source language code (default: en)
-- ``--target-language``: Target language code (default: de). When using the RIVA
-  Magpie Multilingual TTS model, only ``en-US`` is supported as an output language.
+- ``--target-language``: Target language code (default: de)
+- ``--voice-name``: Voice name for TTS (optional, auto-extracted for zero-shot TTS)
 - ``--elevenlabs-num-speakers``: Number of speakers for ElevenLabs dubbing, 0 = auto-detect (default: 0)
 - ``--elevenlabs-drop-background-audio``: Drop background audio from the final dub (flag)
 - ``--elevenlabs-use-profanity-filter``: Censor profanities in transcripts (flag, beta)
@@ -197,21 +202,21 @@ ASD Client Arguments
 - ``--chunk-size-audio-secs``: Audio chunk duration in seconds (default: 1.0)
 - ``--output-speaker-info``: Output speaker info CSV file path (default: assets/asd_speaker_info.csv)
 - ``--diarization-file``: Path to JSON diarization file for speaker segments (optional)
-- ``--diarization-format``: Format of the diarization file (choices: flat, riva, elevenlabs, elevenlabs-studio, camb; default: elevenlabs)
+- ``--diarization-format``: Format of the diarization file (choices: flat, elevenlabs-scribe, elevenlabs-dubbing-api, elevenlabs-studio, camb; default: elevenlabs-scribe). See :doc:`diarization_formats` for a comparison.
 - ``--asd-input-audio-codec``: Audio codec for ASD input (choices: WAV, MP3; default: WAV)
 - ``--asd-input-video-codec``: Video codec for ASD input (choices: H264; optional)
 - ``--asd-audio-source-config``: Audio source mode (choices: unspecified, separate_stream, embedded_in_video; default: unspecified)
-- ``--asd-speaker-detection-threshold``: Confidence threshold for speaker detection (0.0-1.0; optional)
+- ``--asd-speaker-detection-threshold``: Confidence threshold for speaker detection (0.0-1.0; default: 0.5986)
 
 LipSync Client Arguments
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-- ``--target``: gRPC service endpoint (default: 127.0.0.1:50054)
-- ``--video-input``: Input video file path (MP4 format)
-- ``--audio-input``: Input audio file path
+- ``--lipsync-server``: gRPC service endpoint (default: 127.0.0.1:50054; ``--target`` is a deprecated alias)
+- ``--input-mp4``: Input video file path (MP4 format; ``--video-input`` is a deprecated alias)
+- ``--input-audio``: Input audio file path (``--audio-input`` is a deprecated alias)
 - ``--speaker-info-input``: Speaker info CSV file path (optional)
 - ``--background-audio-input``: Background audio file (WAV or MP3) for mixing (optional)
-- ``--output``: Output video file path (default: outputs/lipsync_output.mp4)
+- ``--output-mp4``: Output video file path (default: outputs/lipsync_output.mp4; ``--output`` is a deprecated alias)
 - ``--lipsync-input-audio-codec``: Audio codec for input (choices: WAV, MP3; default: MP3)
 - ``--lipsync-extend-audio``: Audio extension handling (choices: unspecified, silence; default: unspecified)
 - ``--lipsync-extend-video``: Video extension handling (choices: unspecified, forward, reverse; default: unspecified)
@@ -253,7 +258,7 @@ and audio bytes. Using a streamable MP4 (moov atom at the start)
 is recommended for best performance but not required:
 
 - Streamable MP4 reduces memory usage and enables earlier inference
-- Convert to streamable format: ``scripts/convert_to_streamable_mp4.sh``
+- Convert to streamable format: ``scripts/misc/convert_to_streamable_mp4.sh``
 - Non-streamable MP4 files are also accepted
 
 Latency Optimization
@@ -277,7 +282,8 @@ Clone the repository, install dependencies, and point your ``PYTHONPATH`` to the
 
    git clone <repository-url>
    cd repo-dir
-   pip install -r requirements-dev.txt
+   uv sync
+   source .venv/bin/activate
    export PYTHONPATH="${PWD}:${PWD}/src:${PWD}/client:${PWD}/protos/generated:${PYTHONPATH}"
 
 Basic Usage
@@ -370,20 +376,20 @@ speaker info data for focused processing.
 
    # Basic
    python client/lipsync/app.py \
-       --target 127.0.0.1:50054 \
-       --video-input input.mp4 \
-       --audio-input input.wav \
-       --output output.mp4
+       --lipsync-server 127.0.0.1:50054 \
+       --input-mp4 input.mp4 \
+       --input-audio input.wav \
+       --output-mp4 output.mp4
 
 .. code-block:: bash
 
    # With speaker info from ASD
    python client/lipsync/app.py \
-       --target 127.0.0.1:50054 \
-       --video-input input.mp4 \
-       --audio-input input.wav \
+       --lipsync-server 127.0.0.1:50054 \
+       --input-mp4 input.mp4 \
+       --input-audio input.wav \
        --speaker-info-input speaker_info.csv \
-       --output output.mp4
+       --output-mp4 output.mp4
 
 Client Types
 ------------
@@ -421,7 +427,7 @@ Cannot Connect to a Service
 
    .. code-block:: python
 
-       from utils import check_service_health
+       from common.health import check_service_health
 
        # Test connection
        is_healthy = check_service_health("localhost:50050")
@@ -444,8 +450,7 @@ Unsupported Audio Format
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 - Only WAV and MP3 audio formats are supported
-- RIVA only supports WAV audio format for input and output. Refer to RIVA docs for more details.
-- 11labs requires a mp3 audio file for output.
+- ElevenLabs produces MP3 output by default.
 - File validation failures
 
 **Solutions**:
@@ -505,8 +510,10 @@ Non-Streamable Video
 ~~~~~~~~~~~~~~~~~~~~
 
 **Symptoms**:
-- "Video file is not streamable" error
-- Streaming mode failures
+
+- ``Video streamable: False`` in client DEBUG logs (no error is raised)
+- Higher memory usage and delayed inference start; non-streamable MP4
+  files are still accepted
 
 **Solutions**:
 
@@ -515,13 +522,13 @@ Non-Streamable Video
    .. code-block:: bash
 
        # Make video streamable using helper script
-       ./scripts/convert_to_streamable_mp4.sh input.mp4
+       ./scripts/misc/convert_to_streamable_mp4.sh input.mp4
 
 2. **Check streamability**:
 
    .. code-block:: python
 
-       from utils import check_streamable
+       from common.media import check_streamable
 
        is_streamable = check_streamable("input.mp4")
        print(f"Video is streamable: {is_streamable}")
@@ -549,27 +556,12 @@ High Latency
         # Use smaller video chunks
         python client/controller/app.py --chunk-size-video-bytes 32768
 
-2. **Monitor latency**:
-
-    .. code-block:: python
-
-        from latency_analysis import calculate_per_chunk_latencies
-        
-        # Calculate and analyze latencies
-        latencies = calculate_per_chunk_latencies(
-            input_ledger=source.ledger,
-            output_ledger=sink.ledger
-        )
-        
-        avg_latency = sum(latencies) / len(latencies)
-        print(f"Average latency: {avg_latency:.3f}s")
-
-3. **Check network conditions**:
+2. **Check network conditions**:
    - Ensure low network latency
    - Use local services when possible
    - Check bandwidth availability
 
-4. **Optimize video encoding**:
+3. **Optimize video encoding**:
 
    .. code-block:: bash
 
@@ -659,8 +651,8 @@ Invalid Speaker Info Format
         # Check CSV format
         head -5 speaker_info.csv
         
-        # Verify column structure
-        # Expected: bbox_x,bbox_y,bbox_w,bbox_h
+        # Verify column structure. Expected header:
+        # frame_id,x,y,width,height,diarized_speaker_id,face_id,is_speaking,face_detection_confidence
 
 2. **Validate speaker info coordinates**:
    - Ensure coordinates are within video dimensions
@@ -676,10 +668,14 @@ Invalid Speaker Info Format
         # Create sample speaker info file
         with open('sample_speaker_info.csv', 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['bbox_x', 'bbox_y', 'bbox_w', 'bbox_h'])
-            # Add speaker info entries for each frame
+            writer.writerow([
+                'frame_id', 'x', 'y', 'width', 'height',
+                'diarized_speaker_id', 'face_id', 'is_speaking',
+                'face_detection_confidence',
+            ])
+            # Add one row per video frame
             for frame in range(100):
-                writer.writerow([100, 100, 200, 200])  # Example coordinates
+                writer.writerow([frame, 100, 100, 200, 200, 0, 0, True, 0.99])
 
 SSL/TLS Issues
 ~~~~~~~~~~~~~~
@@ -705,18 +701,15 @@ SSL Certificate Errors
     .. code-block:: bash
 
         # Verify certificate files exist
-        ls -la ssl_key/
-        
+        ls -la certs/
+
         # Check certificate validity
-        openssl x509 -in ssl_key/ssl_cert_client.pem -text -noout
+        openssl x509 -in certs/client.pem -text -noout
 
 3. **Generate self-signed certificates** (for testing):
 
     .. code-block:: bash
 
-        # Generate CA certificate
-        openssl req -x509 -newkey rsa:4096 -keyout ca_key.pem -out ca_cert.pem -days 365
-        
-        # Generate client certificate
-        openssl req -newkey rsa:4096 -keyout client_key.pem -out client_cert.pem
-
+        # Generates a dev CA plus per-service server certs and an mTLS
+        # client cert into ./certs (development/testing only)
+        bash scripts/misc/generate_dev_certs.sh

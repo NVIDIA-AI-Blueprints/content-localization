@@ -13,10 +13,13 @@ from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncConfig
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
 
 from client.asd.args import asd_config_from_args
-from client.direct.pipeline import _is_wav_file
+from client.common.audio import AUDIO_CODEC_CONFIGS
+from client.common.bypass import resolve_bypass_asd
+from client.common.paths import ensure_parent_dir
 from client.lipsync.args import lipsync_config_from_args
-from client.lipsync.constants import AUDIO_CODEC_CONFIGS
 from client.s2s.args import s2s_config_from_args
+from common.audio_utils import is_wav_file
+from common.media import is_file_available
 
 KB = 1024
 MB = 1024 * KB
@@ -43,6 +46,16 @@ class DirectPipelineConfig:
         chunk_size_video_bytes: Video chunk size in bytes.
         bypass_asd: If ``True``, skip ASD and use LipSync internal
             face detection instead.
+        background_audio_input: Path to background audio file for
+            LipSync mixing (optional, WAV or MP3).
+        translated_audio: Path to pre-translated audio file (WAV or
+            MP3). When provided, S2S is bypassed and this audio is
+            sent directly to LipSync (optional).
+        input_audio: Path to input audio file (optional).
+        output_audio: Path to output audio file (optional).
+        input_mp4: Path to input video file (optional).
+        output_mp4: Path to output video file (optional).
+        diarization_file: Path to the diarization file (optional).
 
     Examples:
         >>> from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
@@ -73,9 +86,18 @@ class DirectPipelineConfig:
     bypass_asd: bool = False
     background_audio_input: str | None = None
     translated_audio: str | None = None
+    input_audio: str | None = None
+    output_audio: str | None = None
+    input_mp4: str | None = None
+    output_mp4: str | None = None
+    diarization_file: str | None = None
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> "DirectPipelineConfig":
+    def from_args(
+        cls,
+        args: argparse.Namespace,
+        auto_bypass_asd: bool = True,
+    ) -> "DirectPipelineConfig":
         """Build a ``DirectPipelineConfig`` from parsed CLI arguments.
 
         Delegates to ``s2s_config_from_args``, ``asd_config_from_args``,
@@ -85,6 +107,8 @@ class DirectPipelineConfig:
         Args:
             args (argparse.Namespace): Parsed argument namespace with
                 direct-client, S2S, ASD, and LipSync attributes.
+            auto_bypass_asd (bool): When ``True`` (default), bypass ASD
+                automatically if no diarization file was provided.
 
         Returns:
             DirectPipelineConfig: Populated configuration instance.
@@ -100,6 +124,7 @@ class DirectPipelineConfig:
             ...     bypass_asd=False,
             ...     source_language="en",
             ...     target_language="de",
+            ...     voice_name=None,
             ...     elevenlabs_num_speakers=0,
             ...     elevenlabs_drop_background_audio=False,
             ...     elevenlabs_use_profanity_filter=False,
@@ -124,12 +149,7 @@ class DirectPipelineConfig:
         """
         lipsync_config = lipsync_config_from_args(args)
 
-        # Auto-detect bypass_asd when no diarization file is provided
-        bypass_asd = getattr(args, "bypass_asd", False)
-        diarization_file = getattr(args, "diarization_file", None)
-        if not bypass_asd and diarization_file is None:
-            print("ASD bypassed — LipSync will use internal face detection")
-            bypass_asd = True
+        bypass_asd = resolve_bypass_asd(args=args, auto_bypass_asd=auto_bypass_asd)
 
         # When ASD is enabled, LipSync must know to expect speaker info
         if not bypass_asd:
@@ -137,11 +157,11 @@ class DirectPipelineConfig:
 
         translated_audio = getattr(args, "translated_audio", None)
 
-        # Auto-detect actual audio codec from file content (not just
-        # extension) because ElevenLabs sometimes returns MP3 data
-        # inside a .wav filename.
-        if translated_audio:
-            actual_codec = "wav" if _is_wav_file(translated_audio) else "mp3"
+        # Detect the actual audio codec from file content only when the
+        # customer did not provide --lipsync-input-audio-codec. ElevenLabs
+        # sometimes returns MP3 data inside a .wav filename.
+        if translated_audio and getattr(args, "lipsync_input_audio_codec", None) is None:
+            actual_codec = "wav" if is_wav_file(translated_audio) else "mp3"
             lipsync_config.input_audio_codec = AUDIO_CODEC_CONFIGS[actual_codec]
 
         s2s_config = None if translated_audio else s2s_config_from_args(args)
@@ -160,4 +180,96 @@ class DirectPipelineConfig:
             bypass_asd=bypass_asd,
             background_audio_input=getattr(args, "background_audio_input", None),
             translated_audio=translated_audio,
+            input_audio=getattr(args, "input_audio", None),
+            output_audio=getattr(args, "output_audio", None),
+            input_mp4=getattr(args, "input_mp4", None),
+            output_mp4=getattr(args, "output_mp4", None),
+            diarization_file=getattr(args, "diarization_file", None),
         )
+
+    def validate_io(self) -> bool:
+        """Validate I/O paths and chunk sizes.
+
+        Checks that input audio and video files exist with supported
+        formats, output parent directories exist (creating them when
+        needed), the diarization file is valid (when provided), and
+        chunk sizes are positive.
+
+        I/O path checks are skipped when the corresponding field is
+        ``None``, so callers that manage their own files can safely
+        skip validation.
+
+        Returns:
+            bool: ``True`` if validation passes.
+
+        Raises:
+            RuntimeError: If input files are missing, formats are
+                unsupported, or chunk sizes are non-positive.
+
+        Examples:
+            >>> cfg = DirectPipelineConfig.from_args(args)
+            >>> cfg.validate_io()
+            True
+        """
+        if self.input_audio is not None and not is_file_available(
+            file_path=self.input_audio, file_types=["wav", "mp3"]
+        ):
+            raise RuntimeError(
+                f"Input audio file not found or unsupported"
+                f" format: {self.input_audio}. "
+                "Only WAV and MP3 formats are supported."
+            )
+
+        if self.input_mp4 is not None and not is_file_available(
+            file_path=self.input_mp4, file_types=["mp4"]
+        ):
+            raise RuntimeError(
+                f"Input video file not found or unsupported"
+                f" format: {self.input_mp4}. "
+                "Only MP4 format is supported."
+            )
+
+        if self.output_audio is not None:
+            ensure_parent_dir(path=self.output_audio)
+
+        if self.output_mp4 is not None:
+            ensure_parent_dir(path=self.output_mp4)
+
+        if self.diarization_file and not is_file_available(
+            file_path=self.diarization_file, file_types=["json", "csv"]
+        ):
+            raise RuntimeError(
+                f"Diarization file not found or unsupported"
+                f" format: {self.diarization_file}. "
+                "Only JSON and CSV formats are supported."
+            )
+
+        if self.background_audio_input is not None and not is_file_available(
+            file_path=self.background_audio_input, file_types=["wav", "mp3"]
+        ):
+            raise RuntimeError(
+                f"Background audio file not found or unsupported"
+                f" format: {self.background_audio_input}. "
+                "Only WAV and MP3 formats are supported."
+            )
+
+        if self.translated_audio is not None and not is_file_available(
+            file_path=self.translated_audio, file_types=["wav", "mp3"]
+        ):
+            raise RuntimeError(
+                f"Translated audio file not found or unsupported"
+                f" format: {self.translated_audio}. "
+                "Only WAV and MP3 formats are supported."
+            )
+
+        if self.chunk_size_audio_secs <= 0:
+            raise RuntimeError(
+                f"Audio chunk size must be positive, got {self.chunk_size_audio_secs}."
+            )
+
+        if self.chunk_size_video_bytes <= 0:
+            raise RuntimeError(
+                f"Video chunk size must be positive, got {self.chunk_size_video_bytes}."
+            )
+
+        return True

@@ -3,9 +3,8 @@
 
 """Thread-safe buffer implementations for producer-consumer patterns.
 
-This module provides abstract and concrete buffer classes for use in
-multi-threaded environments where producers and consumers run on
-different threads.
+This module provides buffer classes for use in multi-threaded
+environments where producers and consumers run on different threads.
 
 Key Features:
 - Thread-safe put/get operations
@@ -17,14 +16,13 @@ Key Features:
 import os
 import queue
 import threading
-from abc import ABC
 from collections.abc import Callable
 from collections.abc import Iterator
 from copy import deepcopy
 from typing import Generic
 from typing import TypeVar
 
-from base_utils import logger
+from common.base_utils import logger
 
 T = TypeVar("T")
 ReqT = TypeVar("ReqT")
@@ -35,8 +33,8 @@ RespT = TypeVar("RespT")
 BUFFER_POLL_TIMEOUT: float = float(os.environ.get("BUFFER_POLL_TIMEOUT", "0.1"))
 
 
-class Buffer(ABC, Generic[T]):
-    """Abstract base class for thread-safe producer-consumer buffers.
+class Buffer(Generic[T]):
+    """Thread-safe producer-consumer buffer with multi-queue fan-out.
 
     This class provides a thread-safe buffer implementation that supports:
     - Single producer putting items into the buffer
@@ -44,9 +42,11 @@ class Buffer(ABC, Generic[T]):
     - Done signaling to indicate producer has finished
     - Configurable buffer sizes and timeouts
 
-    The buffer uses copy-on-put semantics when multiple queues are configured,
-    where each queue receives its own copy of the item created via the provided
-    copy function.
+    The buffer uses copy-on-put semantics when multiple queues are configured:
+    queue 0 receives the producer's original object and every other queue
+    receives its own copy created via the provided copy function. Producers
+    must therefore not mutate an item after ``put()`` — the mutation would be
+    visible to consumer 0 only.
 
     Type Parameters:
         T: The type of items stored in the buffer.
@@ -56,11 +56,11 @@ class Buffer(ABC, Generic[T]):
 
     Example:
         >>> from copy import deepcopy
-        >>> buffer = ConcreteBuffer(
+        >>> buffer = Buffer(
         ...     num_queues=2,
         ...     copy_func=deepcopy,
         ... )
-        >>> buffer.put(some_item)  # Copies to both queues
+        >>> buffer.put("some_item")  # Original to queue 0, copy to queue 1
         >>> item_asd = buffer.get(0)
         >>> item_lipsync = buffer.get(1)
         >>> buffer.done = True  # Signal producer finished
@@ -102,6 +102,12 @@ class Buffer(ABC, Generic[T]):
         # Done state with lock for thread-safe access
         self._done = False
         self._done_lock = threading.Lock()
+
+        # Item counters guarded by a dedicated stats lock so producers and
+        # consumers can report throughput without contending on the done flag.
+        self._stats_lock = threading.Lock()
+        self._put_count = 0
+        self._get_count = 0
         logger.debug(f"Buffer initialized: num_queues={num_queues}, max_size={max_size}")
 
     @property
@@ -137,6 +143,48 @@ class Buffer(ABC, Generic[T]):
         """Return the number of consumer queues."""
         return len(self._queues)
 
+    @property
+    def put_count(self) -> int:
+        """Number of items successfully put into the buffer.
+
+        Counts ``put()`` calls that delivered to every queue — items, not
+        per-queue fan-out copies. Records arrivals independently of
+        consumption, so it remains meaningful after consumers have drained
+        the queues.
+
+        Returns:
+            int: Total items accepted by ``put()``.
+
+        Examples:
+            >>> buffer = Buffer(num_queues=2)
+            >>> buffer.put("item")
+            >>> buffer.put_count
+            1
+        """
+        with self._stats_lock:
+            return self._put_count
+
+    @property
+    def get_count(self) -> int:
+        """Number of items successfully returned by ``get()``.
+
+        Counts across all consumer queues, so a fully consumed multi-queue
+        buffer reports one get per queue per item
+        (``put_count * num_queues``).
+
+        Returns:
+            int: Total items returned by ``get()``.
+
+        Examples:
+            >>> buffer = Buffer(num_queues=1)
+            >>> buffer.put("item")
+            >>> _ = buffer.get(0)
+            >>> buffer.get_count
+            1
+        """
+        with self._stats_lock:
+            return self._get_count
+
     def _validate_consumer(self, consumer_id: int) -> None:
         """Validate that consumer_id refers to an existing queue."""
         if not 0 <= consumer_id < len(self._queues):
@@ -145,8 +193,10 @@ class Buffer(ABC, Generic[T]):
     def put(self, item: T, timeout: float | None = None) -> None:
         """Put an item into the buffer for all consumers.
 
-        When multiple queues are configured, creates copies of the item
-        using the copy_func and puts one copy into each queue.
+        When multiple queues are configured, queue 0 receives the original
+        item and every other queue receives a copy created via ``copy_func``.
+        Callers must not mutate the item after ``put()`` — consumer 0 shares
+        the caller's object.
 
         Args:
             item: The item to put into the buffer.
@@ -154,13 +204,18 @@ class Buffer(ABC, Generic[T]):
                 indefinitely. Defaults to None.
 
         Raises:
-            queue.Full: If timeout expires before item can be added.
+            queue.Full: If timeout expires before item can be added. With
+                multiple bounded queues the fan-out is not atomic: queues
+                before the full one have already received the item, so a
+                retry would deliver duplicates to those queues.
         """
         if len(self._queues) == 1:
             if timeout is None:
                 self._queues[0].put(item)
             else:
                 self._queues[0].put(item, timeout=timeout)
+            with self._stats_lock:
+                self._put_count += 1
             return
 
         for idx, _queue in enumerate(self._queues):
@@ -169,6 +224,8 @@ class Buffer(ABC, Generic[T]):
                 _queue.put(copy_item)
             else:
                 _queue.put(copy_item, timeout=timeout)
+        with self._stats_lock:
+            self._put_count += 1
 
     def get(self, consumer_id: int = 0, timeout: float | None = None) -> T:
         """Get an item from the specified consumer's queue.
@@ -191,6 +248,8 @@ class Buffer(ABC, Generic[T]):
             item = consumer_queue.get()
         else:
             item = consumer_queue.get(timeout=timeout)
+        with self._stats_lock:
+            self._get_count += 1
         return item
 
     def qsize(self, consumer_id: int = 0) -> int:

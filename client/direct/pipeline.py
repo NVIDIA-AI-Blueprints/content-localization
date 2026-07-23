@@ -8,9 +8,12 @@ from collections.abc import Iterator
 from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncInputData
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechResponse
 
-from client.source_simulators.audio import AudioSinkSimulator
-from client.source_simulators.audio import AudioSourceSimulator
-from client.utils import create_wav_header
+from client.common.audio import DATA_CHUNK_SIZE
+from common.audio_utils import create_wav_header
+from common.audio_utils import is_wav_file
+from common.base_utils import logger
+from common.source_sink.grpc.audio import AudioSinkSimulator
+from common.source_sink.grpc.audio import AudioSourceSimulator
 
 
 def audio_iterator_from_s2s_response_with_format(
@@ -51,7 +54,7 @@ def audio_iterator_from_s2s_response_with_format(
         try:
             # Handle keep-alive responses
             if response.HasField("keepalive"):
-                print("s2s | received keep-alive from S2S, skipping")
+                logger.debug("s2s | received keep-alive from S2S, skipping")
                 continue
 
             if first_response:
@@ -59,8 +62,8 @@ def audio_iterator_from_s2s_response_with_format(
                     response.audio_format.lower() if response.audio_format else "mp3"
                 )
                 if audio_format_from_s2s != audio_format:
-                    print(
-                        f"WARNING: Audio format from S2S service is "
+                    logger.warning(
+                        f"Audio format from S2S service is "
                         f"{audio_format_from_s2s}, but expected "
                         f"{audio_format}. Continuing with detected "
                         f"format."
@@ -82,7 +85,7 @@ def audio_iterator_from_s2s_response_with_format(
                     )
                     yield LipsyncInputData(audio_file_data=wav_header)
                 elif data_already_has_header:
-                    print(
+                    logger.warning(
                         "s2s | first chunk already contains a WAV header, skipping synthetic header"
                     )
 
@@ -93,10 +96,16 @@ def audio_iterator_from_s2s_response_with_format(
             # Send audio data chunk
             yield LipsyncInputData(audio_file_data=response.audio_data)
 
-        except Exception as e:
-            print(f"Error processing S2S response: {e}")
-            # Continue processing other responses
+        except (AttributeError, ValueError, OSError) as exc:
+            # Recoverable per-chunk issues (malformed response, I/O hiccup):
+            # log and skip just this chunk. TypeError/RuntimeError are left to
+            # the generic handler below since they usually signal real bugs.
+            logger.warning(f"Skipping malformed S2S response chunk: {exc}")
             continue
+        except Exception:
+            # Unexpected failure: surface it instead of silently dropping output.
+            logger.exception("Unexpected error processing S2S response")
+            raise
 
 
 def video_iterator_from_source(
@@ -118,30 +127,6 @@ def video_iterator_from_source(
     """
     for chunk in source_iterator:
         yield LipsyncInputData(video_file_data=chunk)
-
-
-DATA_CHUNK_SIZE = 64 * 1024  # 64 KB, matches lipsync client chunk size
-
-
-def _is_wav_file(file_path: str) -> bool:
-    """Check whether *file_path* is a real WAV (RIFF) file.
-
-    Reads the first 4 bytes and looks for the ``RIFF`` magic.
-    Returns ``False`` for non-WAV files (e.g. MP3 with a ``.wav``
-    extension, which ElevenLabs sometimes produces).
-
-    Args:
-        file_path (str): Path to the audio file.
-
-    Returns:
-        bool: ``True`` if the file starts with a RIFF header.
-
-    Examples:
-        >>> _is_wav_file("real.wav")  # doctest: +SKIP
-        True
-    """
-    with open(file_path, "rb") as f:
-        return f.read(4) == b"RIFF"
 
 
 def audio_iterator_from_file(
@@ -174,7 +159,7 @@ def audio_iterator_from_file(
         ...     chunk_size_secs=1.0,
         ... )  # doctest: +SKIP
     """
-    if _is_wav_file(file_path):
+    if is_wav_file(file_path):
         source = AudioSourceSimulator(file_path=file_path)
         for chunk in source.read(chunk_duration_secs=chunk_size_secs):
             yield LipsyncInputData(audio_file_data=chunk)

@@ -20,9 +20,10 @@ from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechResponse
 from nvidia.ai4m.s2s.v1.s2s_pb2_grpc import SpeechToSpeechServicer
 from nvidia.ai4m.s2s.v1.s2s_pb2_grpc import add_SpeechToSpeechServicer_to_server
 
-from base_utils import GRPCServiceBase
-from base_utils import logger
 from common.audio_utils import download_audio_file_from_iterator
+from common.audio_utils import is_wav_file
+from common.base_utils import GRPCServiceBase
+from common.base_utils import logger
 from common.buffers import Buffer
 from common.buffers import RequestIteratorFromBuffer
 
@@ -78,14 +79,29 @@ def download_input_audio_file(
         tb = traceback.format_exc()
         logger.error(f"Error collecting audio data in request id {request_id}: {e}\n{tb}")
         context.abort(grpc.StatusCode.INTERNAL, f"Collecting audio data failed: {e}\n{tb}")
-    # Fix WAV header if nframes is 0 (common when streaming)
+
+    # Non-WAV inputs (e.g. MP3) must not go through the WAV header-fix path.
+    if not is_wav_file(input_path):
+        non_wav_path = input_path.removesuffix(".wav") + ".mp3"
+        os.rename(input_path, non_wav_path)
+        logger.info(f"Non-WAV input detected for {request_id}, saved as {non_wav_path}")
+        logger.debug(
+            f"Input file streamed in for request id {request_id}: {non_wav_path} of "
+            f"size {os.path.getsize(non_wav_path)} bytes"
+        )
+        return non_wav_path
+
+    # Fix WAV header if nframes is 0 (common when streaming).
+    # Capture everything inside the with block — wave.Wave_read is closed on exit
+    # and calling methods on it afterwards is undefined behaviour.
     with wave.open(input_path, "rb") as wav_check:
-        if wav_check.getnframes() == 0:
+        nframes = wav_check.getnframes()
+        if nframes == 0:
             sample_rate = wav_check.getframerate()
             channels = wav_check.getnchannels()
             sample_width = wav_check.getsampwidth()
 
-    if wav_check.getnframes() == 0:
+    if nframes == 0:
         with open(input_path, "rb") as raw_file:
             raw_file.seek(44)
             pcm_data = raw_file.read()
@@ -110,8 +126,7 @@ class S2SServiceServicer(SpeechToSpeechServicer):
 
     This class handles the gRPC streaming service for speech-to-speech conversion.
     It delegates processing to the configured S2S service implementation, which
-    may use background threads and buffers (RIVA) or queue-based background work
-    (ElevenLabs) to produce streaming responses.
+    uses queue-based background work to produce streaming responses.
     """
 
     def __init__(self, service: "S2SService") -> None:
@@ -128,15 +143,16 @@ class S2SServiceServicer(SpeechToSpeechServicer):
         request_iterator: Iterator[SpeechToSpeechRequest],
         context: grpc.ServicerContext,
     ) -> Iterator[SpeechToSpeechResponse]:
-        """Process audio stream and return synthesized speech.
+        """Process an audio stream and return dubbed speech.
 
         This is the RPC method that the client will call into.
 
         This method implements the bidirectional streaming RPC. It:
+
         1. Receives audio chunks from the client
-        2. Sends them to ASR for transcription
-        3. Sends transcriptions to TTS for speech synthesis
-        4. Returns synthesized audio chunks to the client
+        2. Submits the collected audio to the dubbing API (ElevenLabs or CambAI)
+        3. Sends keepalive responses while the dubbing job runs
+        4. Streams the dubbed audio chunks back to the client
 
         Args:
             request_iterator (Iterator[SpeechToSpeechRequest]): Async iterator of incoming

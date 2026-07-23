@@ -12,4 +12,5 @@ Auto-generated API documentation from Python docstrings.
    common
    controller_service
    s2s_service
+   diarization
    client

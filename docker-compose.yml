@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# Trust boundary: gRPC hops between these services are plaintext within the
+# compose network by default; enable the controller/client TLS flags for
+# deployments whose service-to-service traffic crosses untrusted networks.
 services:
   # Speech-to-Speech service
   speech-to-speech:
@@ -17,10 +20,6 @@ services:
       - AI4M_LOG_LEVEL=${S2S_LOG_LEVEL}
       - S2S_GRPC_CONCURRENCY_MODE=${S2S_GRPC_CONCURRENCY_MODE}
       - S2S_GRPC_THREADS_PER_PROCESS=${S2S_GRPC_THREADS_PER_PROCESS}
-
-      # RIVA parameters, needed if running RIVA service.
-      - AST_SERVER=riva-ast:${AST_NIM_GRPC_API_PORT}
-      - TTS_SERVER=riva-tts:${TTS_NIM_GRPC_API_PORT}
 
       # S2S service parameters.
       - S2S_SERVICE=${S2S_SERVICE}
@@ -39,144 +38,46 @@ services:
       # Timeout and polling configuration
       - HEALTH_CHECK_TIMEOUT=${HEALTH_CHECK_TIMEOUT:-5.0}
       - BUFFER_POLL_TIMEOUT=${BUFFER_POLL_TIMEOUT:-0.1}
-      - S2S_CLEANUP_TIMEOUT=${S2S_CLEANUP_TIMEOUT:-1.0}
       - S2S_EL_DUBBING_POLL_INTERVAL=${S2S_EL_DUBBING_POLL_INTERVAL:-10}
       - S2S_EL_DUBBING_MAX_ATTEMPTS=${S2S_EL_DUBBING_MAX_ATTEMPTS:-120}
       - S2S_EL_KEEPALIVE_INTERVAL=${S2S_EL_KEEPALIVE_INTERVAL:-1}
       - S2S_CAMB_DUBBING_POLL_INTERVAL=${S2S_CAMB_DUBBING_POLL_INTERVAL:-10}
       - S2S_CAMB_DUBBING_MAX_ATTEMPTS=${S2S_CAMB_DUBBING_MAX_ATTEMPTS:-120}
       - S2S_CAMB_KEEPALIVE_INTERVAL=${S2S_CAMB_KEEPALIVE_INTERVAL:-1}
+      - S2S_CAMB_ALT_FORMAT_POLL_INTERVAL=${S2S_CAMB_ALT_FORMAT_POLL_INTERVAL:-10}
+      - S2S_CAMB_ALT_FORMAT_MAX_ATTEMPTS=${S2S_CAMB_ALT_FORMAT_MAX_ATTEMPTS:-120}
 
     # Add any necessary ports here
     ports:
       - ${S2S_GRPC_API_PORT}:${S2S_GRPC_API_PORT}
-    runtime: nvidia
+    # CPU-only service: the third-party dubbing backends run remotely, so no
+    # GPU reservation or oversized shared memory is needed here.
     volumes:
-      - ./volumes/tmp:/tmp:rw
+      - ./volumes/tmp/s2s:/tmp:rw
     networks:
       - content-localization-network
-    depends_on:
-      riva-ast:
-        condition: service_healthy
-        required: false
-      riva-tts:
-        condition: service_healthy
-        required: false
     healthcheck:
       test: [ "CMD", "grpcurl", "--plaintext", "--import-path", "/opt/s2s/protos", "--proto", "/opt/s2s/protos/health.proto", "speech-to-speech:${S2S_GRPC_API_PORT}", "grpc.health.v1.Health/Check" ]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 10s
-    shm_size: 16GB
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities:
-                - gpu
     profiles:
       - default
       - third-party-s2s
-      - riva
       - lipsync
       - third-party-s2s-lipsync
-      - riva-lipsync
       - third-party-s2s-asd-lipsync
-      - riva-asd-lipsync
-      - controller-riva
       - controller-third-party-s2s
       - demo-app-third-party-s2s
-      - demo-app-riva
-
-  # Riva ASR service
-  riva-ast:
-    container_name: ast
-    image: ${AST_IMAGE}
-    ports:
-      - "${AST_NIM_HTTP_API_PORT}:${AST_NIM_HTTP_API_PORT}"
-      - "${AST_NIM_GRPC_API_PORT}:${AST_NIM_GRPC_API_PORT}"
-    environment:
-      - NIM_GRPC_API_PORT=${AST_NIM_GRPC_API_PORT}
-      - NIM_HTTP_API_PORT=${AST_NIM_HTTP_API_PORT}
-      - NIM_TAGS_SELECTOR=${AST_NIM_TAGS_SELECTOR}
-      - NGC_API_KEY=${AST_API_KEY}
-    volumes:
-      - ${AST_MODEL_MOUNT_PATH}:/opt/nim/.cache:rw
-    networks:
-      - content-localization-network
-
-    healthcheck:
-      test: [ "CMD", "curl", "-v", "http://riva-ast:${AST_NIM_HTTP_API_PORT}/v1/health/ready" ]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 10s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
-    profiles:
-      - default
-      - riva
-      - riva-lipsync
-      - riva-asd-lipsync
-      - controller-riva
-      - demo-app-riva
-
-  # Riva TTS service
-  riva-tts:
-    container_name: tts
-    image: ${TTS_IMAGE}
-    runtime: nvidia
-    shm_size: 4GB
-    ports:
-      - ${TTS_NIM_HTTP_API_PORT}:${TTS_NIM_HTTP_API_PORT}
-      - ${TTS_NIM_GRPC_API_PORT}:${TTS_NIM_GRPC_API_PORT}
-    environment:
-      - NIM_GRPC_API_PORT=${TTS_NIM_GRPC_API_PORT}
-      - NIM_HTTP_API_PORT=${TTS_NIM_HTTP_API_PORT}
-      - NIM_TAGS_SELECTOR=${TTS_NIM_TAGS_SELECTOR}
-      - NGC_API_KEY=${TTS_API_KEY}
-      - NIM_DISABLE_MODEL_DOWNLOAD=true
-    volumes:
-      - ${TTS_MODEL_MOUNT_PATH}:/opt/nim/.cache:rw
-      - ${TTS_MODEL_MOUNT_PATH}/nim_export:/opt/nim/export:rw
-      - ${TTS_MODEL_MOUNT_PATH}/inner_cache:/data/models:rw
-    networks:
-      - content-localization-network
-    healthcheck:
-      test: [ "CMD", "curl", "-v", "http://riva-tts:${TTS_NIM_HTTP_API_PORT}/v1/health/ready" ]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-      # Magpie TTS takes 20+ minutes to start up since it builds TensorRT engines on site.
-      # So for the first time, this might need to be longer.
-      start_period: 10s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
-    profiles:
-      - default
-      - riva
-      - riva-lipsync
-      - riva-asd-lipsync
-      - controller-riva
-      - demo-app-riva
 
   # LIPSYNC service
   lipsync:
     container_name: lipsync
-    image: ${LIP_SYNC_IMAGE}
+    # NOTE: the default LIPSYNC_IMAGE/ASD_IMAGE pins in configs/*.env point at
+    # NVIDIA-internal staging registries (nvcr.io/nvstaging). External users
+    # must override the *_IMAGE variables with published NIM images.
+    image: ${LIPSYNC_IMAGE}
     runtime: nvidia
     shm_size: 4GB
     ports:
@@ -186,8 +87,10 @@ services:
       - NGC_API_KEY=${LIPSYNC_API_KEY}
       - NIM_HTTP_API_PORT=${LIPSYNC_NIM_HTTP_API_PORT}
       - NIM_GRPC_API_PORT=${LIPSYNC_NIM_GRPC_API_PORT}
+      - NIM_TAGS_SELECTOR=${LIPSYNC_NIM_TAGS_SELECTOR}
       - AI4M_LOG_LEVEL=${LIPSYNC_LOG_LEVEL}
       - LIPSYNC_DEBUG_MODE=${LIPSYNC_DEBUG_MODE}
+      - NV_AI4M_LS_INPUT_QUEUE_TIMEOUT_S=${NV_AI4M_LS_INPUT_QUEUE_TIMEOUT_S:-5}
       - NIM_LOG_LEVEL=${LIPSYNC_LOG_LEVEL}
       - LOG_LEVEL=${LIPSYNC_LOG_LEVEL}
     volumes:
@@ -211,18 +114,16 @@ services:
       - default
       - lipsync
       - third-party-s2s-lipsync
-      - riva-lipsync
       - third-party-s2s-asd-lipsync
-      - riva-asd-lipsync
       - asd-lipsync
       - controller-third-party-s2s
-      - controller-riva
       - demo-app-third-party-s2s
-      - demo-app-riva
 
   # Active Speaker Detection NIM
   asd:
     container_name: asd
+    # NOTE: the default ASD_IMAGE pin points at an NVIDIA-internal staging
+    # registry (nvcr.io/nvstaging); external users must override it.
     image: ${ASD_IMAGE}
     runtime: nvidia
     shm_size: 4GB
@@ -260,12 +161,9 @@ services:
       - default
       - asd
       - third-party-s2s-asd-lipsync
-      - riva-asd-lipsync
       - asd-lipsync
       - controller-third-party-s2s
-      - controller-riva
       - demo-app-third-party-s2s
-      - demo-app-riva
 
   # Controller service
   controller:
@@ -273,8 +171,6 @@ services:
     build:
       context: .
       dockerfile: dockerfiles/controller.dockerfile
-      args:
-        CONTROLLER_PROFILER: ${CONTROLLER_PROFILER:-0}
     image: controller:0.1
     tty: true
     stdin_open: true
@@ -306,30 +202,36 @@ services:
       - CONTROLLER_DEBUG_PORT=${CONTROLLER_DEBUG_PORT}
       - CONTROLLER_VS_CODE_DEBUG=${CONTROLLER_VS_CODE_DEBUG}
 
-      # Optional: Enable Profiler
-      - CONTROLLER_PROFILER=${CONTROLLER_PROFILER:-0}
-      - CONTROLLER_PROFILER_OUTPUT_DIR=${CONTROLLER_PROFILER_OUTPUT_DIR:-/profiler}
-      - CONTROLLER_METRIC_TRACKER=${CONTROLLER_METRIC_TRACKER:-0}
-      - CONTROLLER_PROFILER_TYPE=${CONTROLLER_PROFILER_TYPE:-cprofiler}
-
-      # Optional: Enable OpenTelemetry
-      - CONTROLLER_OTEL_ENABLED=${CONTROLLER_OTEL_ENABLED:-false}
-      - CONTROLLER_OTEL_OUTPUT_DIR=${CONTROLLER_OTEL_OUTPUT_DIR:-/otel}
+      # Optional TLS for controller -> NIM channels (plaintext by default,
+      # see docs/source/configuration.rst)
+      - CONTROLLER_NIM_SSL_MODE=${CONTROLLER_NIM_SSL_MODE:-DISABLED}
+      - CONTROLLER_NIM_SSL_KEY=${CONTROLLER_NIM_SSL_KEY:-}
+      - CONTROLLER_NIM_SSL_CERT=${CONTROLLER_NIM_SSL_CERT:-}
+      - CONTROLLER_NIM_SSL_ROOT_CERT=${CONTROLLER_NIM_SSL_ROOT_CERT:-}
+      # Per-hop overrides of CONTROLLER_NIM_SSL_MODE; empty inherits the
+      # global mode. Keep a hop DISABLED when its server runs plaintext
+      # (the in-repo S2S serves TLS only when started with --use-ssl; the
+      # NIM images expose no TLS surface).
+      - CONTROLLER_S2S_SSL_MODE=${CONTROLLER_S2S_SSL_MODE:-}
+      - CONTROLLER_ASD_SSL_MODE=${CONTROLLER_ASD_SSL_MODE:-}
+      - CONTROLLER_LIPSYNC_SSL_MODE=${CONTROLLER_LIPSYNC_SSL_MODE:-}
 
     # Add any necessary ports here
+    # The debugpy port is only published by the opt-in override file
+    # docker-compose.debug.yml (add `-f docker-compose.debug.yml` when
+    # debugging with CONTROLLER_VS_CODE_DEBUG=1).
     ports:
       - ${CONTROLLER_GRPC_API_PORT}:${CONTROLLER_GRPC_API_PORT}
-      - ${CONTROLLER_DEBUG_PORT}:${CONTROLLER_DEBUG_PORT} # Debug port for VS Code
-    runtime: nvidia
+    # CPU-only service: orchestration happens on the CPU; GPU work is done by
+    # the LipSync/ASD NIMs.
     volumes:
-      - ./volumes/tmp:/tmp:rw
-      - ./volumes/profiler:/profiler:rw
+      - ./volumes/tmp/controller:/tmp:rw
     networks:
       - content-localization-network
     depends_on:
       speech-to-speech:
         condition: service_healthy
-        required: true
+        required: false
       asd:
         condition: service_healthy
         required: false
@@ -342,20 +244,11 @@ services:
       timeout: 5s
       retries: 30
       start_period: 10s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
     profiles:
       - default
       - controller-third-party-s2s
-      - controller-riva
       - asd-lipsync
       - demo-app-third-party-s2s
-      - demo-app-riva
 
   demo-app:
     container_name: demo-app
@@ -373,16 +266,13 @@ services:
       - DEFAULT_SOURCE_LANGUAGE=${S2S_DEFAULT_SOURCE_LANGUAGE}
       - DEFAULT_TARGET_LANGUAGE=${S2S_DEFAULT_TARGET_LANGUAGE}
       - OUTPUT_DIR=/demo-app
-      - INPUT_DIR=/demo-app-inputs
+      - INPUT_DIR=/demo-app-assets
       - NEXT_PUBLIC_LOG_LEVEL=${REFERENCE_APP_LOG_LEVEL}
       - REFERENCE_APP_ENABLE_PREPROCESSING=${REFERENCE_APP_ENABLE_PREPROCESSING}
       - S2S_SERVICE=${S2S_SERVICE}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
       - CAMB_API_KEY=${CAMB_API_KEY:-}
 
-    # Set environment variables based on the .env file
-    env_file:
-      - configs/elevenlabs.env
     restart: always
     ports:
       - 3000:3000
@@ -390,16 +280,17 @@ services:
       - content-localization-network
     volumes:
       - ./volumes/demo-app:/demo-app:rw
-      - ./assets:/demo-app-inputs:ro
+      - ./assets:/demo-app-assets:ro
     depends_on:
       controller:
         condition: service_healthy
         required: true
+      speech-to-speech:
+        condition: service_healthy
+        required: true
     profiles:
       - default
-      - demo-app
       - demo-app-third-party-s2s
-      - demo-app-riva
 
 networks:
   content-localization-network:

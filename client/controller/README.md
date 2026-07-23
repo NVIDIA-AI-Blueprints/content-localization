@@ -87,11 +87,12 @@ python client/asd/app.py \
 
 # 2. Run LipSync standalone with the pre-computed speaker info
 python client/lipsync/app.py \
-    --video-input assets/sample_video_streamable.mp4 \
-    --audio-input assets/translated_audio.wav \
+    --input-mp4 assets/sample_video_streamable.mp4 \
+    --input-audio assets/translated_audio.mp3 \
     --speaker-info-input assets/asd_speaker_info.csv \
     --lipsync-is-speaker-info-provided \
-    --output outputs/lipsync_output.mp4
+    --lipsync-input-audio-codec MP3 \
+    --output-mp4 outputs/lipsync_output.mp4
 ```
 
 ## Command Line Arguments
@@ -99,8 +100,9 @@ python client/lipsync/app.py \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--controller-server` | `localhost:50056` | Address and port of the controller gRPC service |
+| `--request-id` | generated UUID4 | Correlation id stamped on every request message and echoed by the controller in its responses |
 | `--input-audio` | `assets/sample_audio.wav` | Path to input audio file (WAV format) |
-| `--input-mp4` | `assets/sample_video_streamable.mp4` | Path to input video file (streamable MP4 only) |
+| `--input-mp4` | `assets/sample_video_streamable.mp4` | Path to input video file (MP4; streamable MP4 recommended) |
 | `--chunk-size-audio-secs` | `1` | Audio chunk size for streaming in seconds |
 | `--chunk-size-video-bytes` | `1048576` (1 MB) | Video chunk size for streaming in bytes |
 | `--output-mp4` | `outputs/controller_output.mp4` | Path to output video file (MP4 format) |

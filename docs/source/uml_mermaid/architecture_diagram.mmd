@@ -26,8 +26,8 @@ flowchart TB
     end
 
     subgraph s2sBackends [S2S Backends]
-        rivaServices[RIVA ASR + TTS]
         elevenLabs[ElevenLabs Dubbing API]
+        cambAi[CambAI Dubbing API]
     end
 
     controllerClient --> controllerService
@@ -63,5 +63,5 @@ flowchart TB
 
     lipService --> controllerService
 
-    s2sService --> rivaServices
     s2sService --> elevenLabs
+    s2sService --> cambAi

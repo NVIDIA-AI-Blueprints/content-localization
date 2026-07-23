@@ -12,37 +12,38 @@ from unittest.mock import patch
 import pytest
 import requests
 
+from common.audio_utils import audio_mime_type
+from s2s_service.camb_utils.api import CambAltFormatPolling
 from s2s_service.camb_utils.api import _confirm_upload
-from s2s_service.camb_utils.api import _detect_content_type
 from s2s_service.camb_utils.api import _request_upload_url
 from s2s_service.camb_utils.api import _upload_file_to_presigned_url
 from s2s_service.camb_utils.api import download_output_audio_to_file
-from s2s_service.camb_utils.api import get_output_audio_url
+from s2s_service.camb_utils.api import find_audio_url
+from s2s_service.camb_utils.api import get_alt_format_output_audio_url
+from s2s_service.camb_utils.api import request_dub_alt_format
 from s2s_service.camb_utils.api import submit_dub_task
 from s2s_service.camb_utils.api import upload_local_file
+from s2s_service.camb_utils.api import wait_for_alt_format_completion
 from s2s_service.camb_utils.api import wait_for_completion
 
 HEADERS = {"x-api-key": "test-key"}
 
 
 @pytest.mark.unit
-class TestDetectContentType(unittest.TestCase):
-    """Tests for _detect_content_type."""
+class TestAudioMimeType(unittest.TestCase):
+    """Tests for common.audio_utils.audio_mime_type."""
 
     def test_wav_file(self) -> None:
-        """WAV files should resolve to audio/x-wav."""
-        result = _detect_content_type(Path("audio.wav"))
-        self.assertIn("wav", result.lower())
+        result = audio_mime_type(Path("audio.wav"))
+        self.assertEqual(result, "audio/wav")
 
     def test_mp3_file(self) -> None:
-        """MP3 files should resolve to audio/mpeg."""
-        result = _detect_content_type(Path("audio.mp3"))
-        self.assertIn("audio", result.lower())
+        result = audio_mime_type(Path("audio.mp3"))
+        self.assertEqual(result, "audio/mpeg")
 
-    def test_unknown_extension(self) -> None:
-        """Unknown extensions should fall back to octet-stream."""
-        result = _detect_content_type(Path("file.xyz123"))
-        self.assertEqual(result, "application/octet-stream")
+    def test_unknown_extension_falls_back_to_wav(self) -> None:
+        result = audio_mime_type(Path("file.xyz123"))
+        self.assertEqual(result, "audio/wav")
 
 
 @pytest.mark.unit
@@ -294,42 +295,172 @@ class TestWaitForCompletion(unittest.TestCase):
 
 
 @pytest.mark.unit
-class TestGetOutputAudioUrl(unittest.TestCase):
-    """Tests for get_output_audio_url."""
+class TestFindAudioUrl(unittest.TestCase):
+    """Tests for find_audio_url."""
 
-    @patch("s2s_service.camb_utils.api.requests.get")
-    def test_output_audio_url_field(self, mock_get: MagicMock) -> None:
-        """Primary field output_audio_url should be returned."""
+    def test_nested_url(self) -> None:
+        """Nested URL fields should be discovered."""
+        payload = {"data": [{"result": {"download_url": "https://cdn/out.mp3"}}]}
+
+        self.assertEqual(find_audio_url(payload), "https://cdn/out.mp3")
+
+    def test_missing_url(self) -> None:
+        """Payloads without URL fields return None."""
+        self.assertIsNone(find_audio_url({"data": [{"status": "SUCCESS"}]}))
+
+
+@pytest.mark.unit
+class TestRequestDubAltFormat(unittest.TestCase):
+    """Tests for request_dub_alt_format."""
+
+    @patch("s2s_service.camb_utils.api.requests.post")
+    def test_defaults_to_mp3(self, mock_post: MagicMock) -> None:
+        """Alt-format requests should default to MP3."""
         mock_response = MagicMock()
-        mock_response.json.return_value = {"output_audio_url": "https://cdn/dubbed.mp3"}
+        mock_response.json.return_value = {"task_id": "task-alt"}
         mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
+        mock_post.return_value = mock_response
 
-        url = get_output_audio_url(run_id=42, headers=HEADERS)
-        self.assertEqual(url, "https://cdn/dubbed.mp3")
+        payload = request_dub_alt_format(run_id=42, language="54", headers=HEADERS)
 
-    @patch("s2s_service.camb_utils.api.requests.get")
-    def test_audio_url_fallback(self, mock_get: MagicMock) -> None:
-        """Fallback to audio_url when output_audio_url is absent."""
+        self.assertEqual(payload, {"task_id": "task-alt"})
+        args, kwargs = mock_post.call_args
+        self.assertIn("/dub-alt-format/42/54", args[0])
+        self.assertEqual(kwargs["json"], {"output_format": "mp3"})
+
+    @patch("s2s_service.camb_utils.api.requests.post")
+    def test_non_object_response_raises(self, mock_post: MagicMock) -> None:
+        """Non-object JSON should raise RuntimeError."""
         mock_response = MagicMock()
-        mock_response.json.return_value = {"audio_url": "https://cdn/alt.mp3"}
+        mock_response.json.return_value = ["unexpected"]
         mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
+        mock_post.return_value = mock_response
 
-        url = get_output_audio_url(run_id=42, headers=HEADERS)
-        self.assertEqual(url, "https://cdn/alt.mp3")
+        with self.assertRaises(RuntimeError):
+            request_dub_alt_format(run_id=42, language="54", headers=HEADERS)
+
+
+@pytest.mark.unit
+class TestWaitForAltFormatCompletion(unittest.TestCase):
+    """Tests for wait_for_alt_format_completion."""
+
+    @patch("s2s_service.camb_utils.api.time.sleep")
+    @patch("s2s_service.camb_utils.api.requests.get")
+    def test_poll_then_success(self, mock_get: MagicMock, mock_sleep: MagicMock) -> None:
+        """Polling through PENDING then SUCCESS returns terminal payload."""
+        pending = MagicMock()
+        pending.json.return_value = {"status": "PENDING"}
+        pending.raise_for_status = MagicMock()
+
+        success = MagicMock()
+        success.json.return_value = {"status": "SUCCESS", "output_url": "https://cdn/out.mp3"}
+        success.raise_for_status = MagicMock()
+
+        mock_get.side_effect = [pending, success]
+
+        payload = wait_for_alt_format_completion(
+            task_id="task-alt",
+            headers=HEADERS,
+            max_attempts=5,
+            poll_interval_seconds=1,
+        )
+        self.assertEqual(payload["output_url"], "https://cdn/out.mp3")
+        mock_sleep.assert_called_once_with(1)
 
     @patch("s2s_service.camb_utils.api.requests.get")
-    def test_missing_url(self, mock_get: MagicMock) -> None:
-        """Missing audio URL should raise RuntimeError."""
+    def test_error_status_raises(self, mock_get: MagicMock) -> None:
+        """Terminal error statuses should raise RuntimeError."""
         mock_response = MagicMock()
-        mock_response.json.return_value = {}
+        mock_response.json.return_value = {"status": "ERROR", "message": "bad format"}
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
         with self.assertRaises(RuntimeError) as ctx:
-            get_output_audio_url(run_id=42, headers=HEADERS)
-        self.assertIn("audio URL", str(ctx.exception))
+            wait_for_alt_format_completion(
+                task_id="task-alt",
+                headers=HEADERS,
+                max_attempts=1,
+                poll_interval_seconds=1,
+            )
+        self.assertIn("ERROR", str(ctx.exception))
+
+
+@pytest.mark.unit
+class TestGetAltFormatOutputAudioUrl(unittest.TestCase):
+    """Tests for get_alt_format_output_audio_url."""
+
+    @patch("s2s_service.camb_utils.api.requests.post")
+    def test_immediate_output_url(self, mock_post: MagicMock) -> None:
+        """Immediate output_url should be returned."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"output_url": "https://cdn/out.mp3"}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        url = get_alt_format_output_audio_url(run_id=42, language="54", headers=HEADERS)
+        self.assertEqual(url, "https://cdn/out.mp3")
+
+    @patch("s2s_service.camb_utils.api.requests.get")
+    @patch("s2s_service.camb_utils.api.requests.post")
+    def test_async_success_refreshes_for_output_url(
+        self,
+        mock_post: MagicMock,
+        mock_get: MagicMock,
+    ) -> None:
+        """A successful async task without URL should refresh the alt-format request."""
+        create_task = MagicMock()
+        create_task.json.return_value = {"task_id": "task-alt"}
+        create_task.raise_for_status = MagicMock()
+
+        refreshed = MagicMock()
+        refreshed.json.return_value = {"output_url": "https://cdn/out.mp3"}
+        refreshed.raise_for_status = MagicMock()
+        mock_post.side_effect = [create_task, refreshed]
+
+        success = MagicMock()
+        success.json.return_value = {"status": "SUCCESS"}
+        success.raise_for_status = MagicMock()
+        mock_get.return_value = success
+
+        url = get_alt_format_output_audio_url(
+            run_id=42,
+            language="54",
+            headers=HEADERS,
+        )
+        self.assertEqual(url, "https://cdn/out.mp3")
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("s2s_service.camb_utils.api.wait_for_alt_format_completion")
+    @patch("s2s_service.camb_utils.api.request_dub_alt_format")
+    def test_custom_polling_options(
+        self,
+        mock_request_alt: MagicMock,
+        mock_wait: MagicMock,
+    ) -> None:
+        """Custom polling options should be forwarded to status polling."""
+        mock_request_alt.side_effect = [
+            {"task_id": "task-alt"},
+            {"output_url": "https://cdn/out.mp3"},
+        ]
+        mock_wait.return_value = {"status": "SUCCESS"}
+
+        url = get_alt_format_output_audio_url(
+            run_id=42,
+            language="54",
+            headers=HEADERS,
+            polling=CambAltFormatPolling(
+                max_attempts=3,
+                poll_interval_seconds=2,
+            ),
+        )
+
+        self.assertEqual(url, "https://cdn/out.mp3")
+        mock_wait.assert_called_once_with(
+            task_id="task-alt",
+            headers=HEADERS,
+            max_attempts=3,
+            poll_interval_seconds=2,
+        )
 
 
 @pytest.mark.unit

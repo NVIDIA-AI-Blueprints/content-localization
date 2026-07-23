@@ -6,7 +6,8 @@
 import fs from "fs";
 import path from "path";
 import logger from "../../utils/logger";
-import { isolateAudio } from "./elevenlabs";
+import { isolateAudio as isolateAudioElevenLabs } from "./elevenlabs";
+import { isolateAudio as isolateAudioCamb } from "./cambai";
 import { saveElevenLabsDiarization, saveCambAiDiarization } from "./elevenLabsDiarization";
 
 const S2S_SERVICE = process.env.S2S_SERVICE;
@@ -131,9 +132,14 @@ export async function processAudioWithAdvancedSettings(params: AudioProcessingPa
 
   // If voice isolation is enabled, perform it (in parallel with diarization)
   if (voiceIsolation) {
-    logger.info("Performing voice isolation");
     const isolatedOutputPath = path.join(audioOutputDir, `${streamId}_isolated.wav`);
-    isolationPromise = isolateAudio(audioFilePath, isolatedOutputPath);
+    if (S2S_SERVICE === "CAMB_DUBBING") {
+      logger.info("Performing voice isolation via Camb AI");
+      isolationPromise = isolateAudioCamb(audioFilePath, isolatedOutputPath);
+    } else {
+      logger.info("Performing voice isolation via ElevenLabs");
+      isolationPromise = isolateAudioElevenLabs(audioFilePath, isolatedOutputPath);
+    }
   }
 
   // Run both in parallel; each settles independently so one failure doesn't affect the other

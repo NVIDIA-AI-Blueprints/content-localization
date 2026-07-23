@@ -10,6 +10,21 @@ and scalability across diverse deployment scenarios, balancing
 throughput with low latency while keeping operational complexity
 manageable.
 
+Design Rationale: Streaming API
+-------------------------------
+
+Every service in the blueprint, including the Controller, exposes a
+synchronous bidirectional streaming gRPC API. This is a deliberate
+design choice: audio and video flow through the pipeline as chunked
+streams, so a single RPC carries a request's full media exchange with
+natural flow control on each hop. Long-running work — third-party
+dubbing jobs can take many minutes — rides the same stream, with
+keepalive messages maintaining the connection while the job runs.
+Each request opens its own channels to the downstream services, and
+failures propagate as typed errors mapped to specific gRPC status
+codes at a single abort point, so a failure anywhere in the pipeline
+reaches the caller deterministically.
+
 System Architecture
 -------------------
 
@@ -48,8 +63,8 @@ applications that interact with the pipeline.
        end
 
        subgraph s2sBackends [S2S Backends]
-           rivaServices[RIVA ASR + TTS]
            elevenLabs[ElevenLabs Dubbing API]
+           cambAi[CambAI Dubbing API]
        end
 
        controllerClient --> controllerService
@@ -85,8 +100,8 @@ applications that interact with the pipeline.
 
        lipService --> controllerService
 
-       s2sService --> rivaServices
        s2sService --> elevenLabs
+       s2sService --> cambAi
 
 Controller Service
 ------------------
@@ -270,13 +285,12 @@ AI Services
 Three AI services implement the core functionality. The
 Speech-to-Speech (S2S) service translates and synthesizes audio
 with streaming support, multi-language coverage, and voice
-cloning. It can run with RIVA (ASR with Canary-1B and TTS with
-Magpie Zeroshot) or ElevenLabs backends (with expanded
-parameters such as ``num_speakers``,
-``drop_background_audio``, ``use_profanity_filter``,
-``target_accent``, and ``highest_resolution``), accepting common
-audio formats and producing translated audio in the requested
-format. The Active Speaker Detection (ASD) service identifies
+cloning. It can run with ElevenLabs backends (with expanded
+parameters such as ``num_speakers``, ``drop_background_audio``,
+``use_profanity_filter``, ``target_accent``, and
+``highest_resolution``) or CambAI dubbing, accepting common audio
+formats and producing translated audio for downstream services.
+The Active Speaker Detection (ASD) service identifies
 the speaker in each scene to be lipsynced, accepts video, audio,
 and optional diarization input for speaker-aware detection, and
 returns per-frame speaker info with confidence scores; it can be

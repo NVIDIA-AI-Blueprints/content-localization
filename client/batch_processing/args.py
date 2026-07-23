@@ -68,17 +68,46 @@ def argsfactory() -> argparse.ArgumentParser:
         "--s2s-service",
         type=str,
         default="EL_DUBBING",
-        choices=["EL_DUBBING", "CAMB_DUBBING", "RIVA_TRANSACTIONAL"],
+        choices=["EL_DUBBING", "CAMB_DUBBING"],
         help=(
             "S2S backend service. Controls diarization provider: "
-            "CAMB_DUBBING uses Camb AI, others use ElevenLabs "
+            "CAMB_DUBBING uses Camb AI, EL_DUBBING uses ElevenLabs "
             "(default: EL_DUBBING)."
         ),
     )
+    parser.add_argument(
+        "--bypass-s2s",
+        action="store_true",
+        help=(
+            "Skip the S2S service: feed pre-translated audio directly to "
+            "LipSync. ASD still runs. See --translated-audio-dir."
+        ),
+    )
+    parser.add_argument(
+        "--translated-audio-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory of pre-translated audio files named '{video_stem}.wav' "
+            "or '{video_stem}.mp3', used when --bypass-s2s is set. When "
+            "omitted, each video's own extracted source audio is used as a "
+            "perf stand-in (it only affects timing, not translation quality)."
+        ),
+    )
+    parser.add_argument(
+        "--diarization-chunked-per-segment",
+        action="store_true",
+        help=(
+            "Stream one diarization chunk per source segment instead of "
+            "merging consecutive same-speaker segments. Inverse of "
+            "combine_chunks_per_speaker."
+        ),
+    )
 
-    # Delegate NIM-specific config args
+    # Delegate NIM-specific config args. Batch drives the controller pipeline,
+    # which always sends audio to ASD as a dedicated gRPC stream.
     add_s2s_config_args_to_parser(parser)
-    add_asd_config_args_to_parser(parser)
+    add_asd_config_args_to_parser(parser=parser, default_audio_source="separate_stream")
     add_lipsync_config_args_to_parser(parser)
 
     return parser

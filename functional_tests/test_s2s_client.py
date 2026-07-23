@@ -24,37 +24,42 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from client.s2s.args import argsfactory
-from client.utils import check_service_health
+from common.health import check_service_health
+
+pytestmark = pytest.mark.functional
+
+# Live services this module exercises. The autouse conftest fixture probes
+# each address and skips the whole module when any service is unreachable.
+REQUIRED_SERVICES = (("S2S", "localhost:50050"),)
 
 
-def test_s2s_service_health():
-    """Check if the S2S service is running and healthy."""
-    print("Checking S2S service health...")
-    try:
-        check_service_health("localhost:50050")
-        print("OK: S2S service is healthy")
-        return True
-    except Exception as e:
-        pytest.fail(f"ERROR: S2S service not available: {e}")
+def test_s2s_service_health() -> None:
+    """The S2S service answers the standard gRPC health probe.
+
+    Examples:
+        >>> test_s2s_service_health()  # doctest: +SKIP
+    """
+    assert check_service_health(server="localhost:50050") is True
 
 
-def test_input_files_exist():
-    """Check if required input files exist."""
-    print("Checking input files...")
+def test_input_files_exist() -> None:
+    """The sample audio input used by the client exists.
 
-    project_root = Path(__file__).parent.parent
+    Examples:
+        >>> test_input_files_exist()  # doctest: +SKIP
+    """
     defaults = argsfactory().parse_args([])
     audio_file = project_root / defaults.input_audio
 
-    if not audio_file.exists():
-        pytest.fail(f"ERROR: Audio file not found: {audio_file}")
-
-    print(f"OK: Audio file found: {audio_file}")
-    return True
+    assert audio_file.exists(), f"Audio file not found: {audio_file}"
 
 
-def cleanup_previous_outputs():
-    """Clean up any previous test outputs."""
+def cleanup_previous_outputs() -> None:
+    """Clean up any previous test outputs.
+
+    Examples:
+        >>> cleanup_previous_outputs()  # doctest: +SKIP
+    """
     outputs_dir = Path(__file__).parent / "outputs"
     if outputs_dir.exists():
         for file in outputs_dir.glob("s2s_*"):
@@ -65,24 +70,58 @@ def cleanup_previous_outputs():
                 print(f"WARNING: Could not clean up {file.name}: {e}")
 
 
-def test_s2s_client_comprehensive(source_language, target_language, audio_format):
-    """Comprehensive S2S client test covering basic and complex functionality."""
-    print("\nStarting comprehensive S2S client test...")
+def _assert_valid_audio_header(output_file: Path, audio_format: str) -> None:
+    """Assert that an audio file starts with a valid WAV or MP3 header.
 
-    # Clean up previous outputs
+    Args:
+        output_file (Path): Path to the audio file to validate.
+        audio_format (str): Expected format, ``wav`` or ``mp3``.
+
+    Examples:
+        >>> _assert_valid_audio_header(Path("out.mp3"), "mp3")  # doctest: +SKIP
+    """
+    with open(output_file, "rb") as f:
+        header = f.read(10)
+    assert len(header) >= 3, f"Output file too small: {len(header)} bytes"
+
+    if audio_format == "wav":
+        is_valid = header.startswith(b"RIFF")
+    else:
+        # MP3 files start with an ID3 tag or an MPEG frame-sync pattern
+        # (11 set bits across the first two bytes).
+        is_valid = header.startswith(b"ID3") or (header[0] == 0xFF and (header[1] & 0xE0) == 0xE0)
+    assert is_valid, f"Output file is not valid {audio_format.upper()}, header: {header[:10]!r}"
+
+
+def test_s2s_client_comprehensive(
+    client_subprocess_env: dict[str, str],
+    source_language: str | None,
+    target_language: str | None,
+    audio_format: str | None,
+) -> None:
+    """Run the S2S client end to end and validate the translated audio output.
+
+    Args:
+        source_language (str | None): Optional source language override from
+            the ``--source-language`` option; falls back to client defaults.
+        target_language (str | None): Optional target language override from
+            the ``--target-language`` option; falls back to client defaults.
+        audio_format (str | None): Optional output audio format from the
+            ``--audio-format`` option; falls back to mp3.
+
+    Examples:
+        >>> # Invoked by pytest with fixture-resolved arguments.
+        >>> test_s2s_client_comprehensive(None, None, None)  # doctest: +SKIP
+    """
     cleanup_previous_outputs()
 
-    # Create outputs directory
     outputs_dir = Path(__file__).parent / "outputs"
     outputs_dir.mkdir(exist_ok=True)
 
-    project_root = Path(__file__).parent.parent
     defaults = argsfactory().parse_args([])
     resolved_source_language = source_language or defaults.source_language
     resolved_target_language = target_language or defaults.target_language
-    resolved_audio_format = audio_format or Path(defaults.output_audio).suffix.lstrip(".")
-    if resolved_audio_format not in {"mp3", "wav"}:
-        pytest.fail(f"ERROR: Unsupported audio format: {resolved_audio_format}")
+    resolved_audio_format = audio_format or "mp3"
 
     output_file = outputs_dir / f"s2s_comprehensive_output.{resolved_audio_format}"
     latency_plot = outputs_dir / "s2s_comprehensive_latency_plot.png"
@@ -110,77 +149,38 @@ def test_s2s_client_comprehensive(source_language, target_language, audio_format
 
     print(f"Running comprehensive S2S test: {' '.join(cmd)}")
 
-    # Run the S2S client
     start_time = time.time()
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minute timeout
-        )
-        end_time = time.time()
-        processing_time = end_time - start_time
+    result = subprocess.run(
+        cmd,
+        env=client_subprocess_env,
+        capture_output=True,
+        text=True,
+        timeout=600,  # 10 minute timeout
+        check=False,
+    )
+    processing_time = time.time() - start_time
 
-        if result.returncode != 0:
-            pytest.fail(
-                f"ERROR: S2S client failed with return code: {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
-            )
+    assert result.returncode == 0, (
+        f"S2S client failed with return code {result.returncode}\n"
+        f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+    )
+    print(f"OK: S2S client completed successfully in {processing_time:.2f} seconds")
 
-        print(f"OK: S2S client completed successfully in {processing_time:.2f} seconds")
-        print(f"STDOUT: {result.stdout}")
+    # Validate audio output
+    assert output_file.exists(), f"Output audio file not created: {output_file}"
+    assert output_file.stat().st_size > 0, f"Output audio file is empty: {output_file}"
+    _assert_valid_audio_header(output_file=output_file, audio_format=resolved_audio_format)
 
-        # Validate audio output
-        if not output_file.exists():
-            pytest.fail(f"ERROR: Output audio file not created: {output_file}")
+    # Validate latency plot
+    assert latency_plot.exists(), f"Latency plot not created: {latency_plot}"
+    assert latency_plot.stat().st_size > 0, f"Latency plot is empty: {latency_plot}"
 
-        if output_file.stat().st_size == 0:
-            pytest.fail(f"ERROR: Output audio file is empty: {output_file}")
+    with open(latency_plot, "rb") as f:
+        png_header = f.read(8)
+    assert png_header == b"\x89PNG\r\n\x1a\n", "Latency plot is not valid PNG format"
 
-        # Validate format by header based on requested audio_format
-        if resolved_audio_format == "mp3":
-            with open(output_file, "rb") as f:
-                header = f.read(10)
-                if len(header) < 3:
-                    pytest.fail(f"ERROR: Output file too small: {len(header)} bytes")
-                is_valid_mp3 = header.startswith(b"ID3") or (
-                    header[0] == 0xFF and (header[1] & 0xE0) == 0xE0
-                )
-                if not is_valid_mp3:
-                    pytest.fail(f"ERROR: Output file is not valid MP3, header: {header[:10]}")
-        else:
-            with open(output_file, "rb") as f:
-                header = f.read(12)
-                if len(header) < 12:
-                    pytest.fail(f"ERROR: Output file too small: {len(header)} bytes")
-                is_valid_wav = header[0:4] == b"RIFF" and header[8:12] == b"WAVE"
-                if not is_valid_wav:
-                    pytest.fail(f"ERROR: Output file is not valid WAV, header: {header[:12]}")
-
-        # Validate latency plot
-        if not latency_plot.exists():
-            pytest.fail(f"ERROR: Latency plot not created: {latency_plot}")
-
-        if latency_plot.stat().st_size == 0:
-            pytest.fail(f"ERROR: Latency plot is empty: {latency_plot}")
-
-        # Validate PNG format for latency plot
-        with open(latency_plot, "rb") as f:
-            png_header = f.read(8)
-            if png_header != b"\x89PNG\r\n\x1a\n":
-                pytest.fail("ERROR: Latency plot is not valid PNG format")
-
-        print(f"OK: Output audio file created successfully: {output_file}")
-        print(f"OK: Output audio file size: {output_file.stat().st_size} bytes")
-        print(f"OK: Output audio file is valid {resolved_audio_format.upper()} format")
-        print(f"OK: Latency plot created successfully: {latency_plot}")
-        print(f"OK: Latency plot size: {latency_plot.stat().st_size} bytes")
-        print("OK: Comprehensive S2S test completed successfully")
-
-    except subprocess.TimeoutExpired:
-        pytest.fail("ERROR: S2S client timed out after 5 minutes")
-    except Exception as e:
-        pytest.fail(f"ERROR: S2S client failed with exception: {e}")
-
-
-# Pytest will automatically discover and run all test_* functions
+    print(
+        f"OK: Output audio is valid {resolved_audio_format.upper()} "
+        f"({output_file.stat().st_size} bytes): {output_file}"
+    )
+    print(f"OK: Latency plot created ({latency_plot.stat().st_size} bytes): {latency_plot}")

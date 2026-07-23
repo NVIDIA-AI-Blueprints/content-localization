@@ -3,6 +3,7 @@
 
 """Tests for latency analysis module."""
 
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -10,10 +11,13 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from client.s2s.latency_analysis import _percentile
 from client.s2s.latency_analysis import calculate_per_chunk_latencies
 from client.s2s.latency_analysis import plot_latency
+from client.s2s.latency_analysis import write_latency_json
 
 
+@pytest.mark.unit
 class TestCalculateLatency:
     """Test cases for calculate_per_chunk_latencies function."""
 
@@ -135,6 +139,7 @@ class TestCalculateLatency:
         assert latency_data[1] == 0.5
 
 
+@pytest.mark.unit
 class TestPlotLatencyAnalysis:
     """Test cases for plot_latency function."""
 
@@ -326,6 +331,100 @@ class TestPlotLatencyAnalysis:
             # The function should handle the statistics internally
             assert output_path.exists()
             assert output_path.stat().st_size > 0
+
+
+@pytest.mark.unit
+class TestPercentile:
+    """Test cases for the ``_percentile`` helper."""
+
+    def test_empty_returns_zero(self):
+        """An empty list yields 0.0 rather than raising."""
+        assert _percentile(values=[], pct=95.0) == 0.0
+
+    def test_single_value(self):
+        """A single sample is its own percentile."""
+        assert _percentile(values=[3.0], pct=95.0) == 3.0
+
+    def test_interpolated_median(self):
+        """The 50th percentile interpolates between the middle samples."""
+        assert _percentile(values=[1.0, 2.0, 3.0, 4.0], pct=50.0) == pytest.approx(2.5)
+
+    def test_p95_high_end(self):
+        """A high percentile lands near the top of the range."""
+        values = [float(i) for i in range(1, 101)]
+        assert _percentile(values=values, pct=95.0) == pytest.approx(95.05)
+
+    def test_out_of_bounds_raises(self):
+        """A pct outside [0, 100] raises, even for empty input."""
+        with pytest.raises(ValueError, match="pct must be in"):
+            _percentile(values=[1.0, 2.0], pct=150.0)
+        with pytest.raises(ValueError, match="pct must be in"):
+            _percentile(values=[], pct=-1.0)
+
+
+@pytest.mark.unit
+class TestLatencyJsonArg:
+    """Test cases for the ``--latency-json`` CLI flag."""
+
+    def test_default_value(self):
+        """The flag defaults to outputs/s2s_latency.json."""
+        from client.s2s.args import argsfactory
+
+        args = argsfactory().parse_args([])
+        assert args.latency_json == "outputs/s2s_latency.json"
+
+    def test_override(self):
+        """A user-supplied path overrides the default."""
+        from client.s2s.args import argsfactory
+
+        args = argsfactory().parse_args(["--latency-json", "custom.json"])
+        assert args.latency_json == "custom.json"
+
+
+@pytest.mark.unit
+class TestWriteLatencyJson:
+    """Test cases for ``write_latency_json``."""
+
+    def test_writes_summary_with_stats(self):
+        """The summary captures means, p95s, and metadata."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "nested" / "s2s_latency.json"
+            summary = write_latency_json(
+                per_chunk_latencies=[0.4, 0.6],
+                output_stream_latencies=[0.9, 1.1],
+                chunk_size_secs=1.0,
+                is_realtime=False,
+                output_path=str(output_path),
+                asset="a.wav",
+                duration_secs=17.0,
+                wall_time_secs=6.5,
+            )
+
+            assert output_path.exists()
+            on_disk = json.loads(output_path.read_text())
+            assert on_disk == summary
+            assert summary["mean_per_chunk_latency"] == pytest.approx(0.5)
+            assert summary["mean_output_stream_latency"] == pytest.approx(1.0)
+            assert summary["num_chunks"] == 2
+            assert summary["is_realtime"] is False
+            assert summary["asset"] == "a.wav"
+            assert summary["duration_secs"] == 17.0
+            assert summary["wall_time_secs"] == 6.5
+
+    def test_handles_empty_latencies(self):
+        """Empty latency lists produce zeroed stats, not errors."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "s2s_latency.json"
+            summary = write_latency_json(
+                per_chunk_latencies=[],
+                output_stream_latencies=[],
+                chunk_size_secs=1.0,
+                is_realtime=True,
+                output_path=str(output_path),
+            )
+            assert summary["mean_per_chunk_latency"] == 0.0
+            assert summary["p95_output_stream_latency"] == 0.0
+            assert summary["num_chunks"] == 0
 
 
 if __name__ == "__main__":

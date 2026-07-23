@@ -4,9 +4,12 @@
 """Batch processing reporting: result storage, console output, JSON export."""
 
 import json
-import os
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field
+
+from client.common.paths import ensure_parent_dir
+from common.base_utils import logger
 
 _SECONDS_PER_MINUTE = 60
 KB = 1024
@@ -20,9 +23,20 @@ class BatchResult:
     Attributes:
         video_name: Input video filename.
         video_duration_secs: Duration of the input video.
-        preprocess_time_secs: Audio extraction time.
-        pipeline_time_secs: Controller service processing time.
-        total_time_secs: Wall-clock time (preprocess + pipeline).
+        video_width: Width of the input video in pixels.
+        video_height: Height of the input video in pixels.
+        video_frame_count: Total frames in the source video (from ffprobe packet count).
+        preprocess_time_secs: Audio extraction time (mirrors ``stage_timings["preprocess"]``).
+        diarization_time_secs: Diarization API call + parse time
+            (mirrors ``stage_timings["diarization"]``).
+        pipeline_time_secs: Controller gRPC call time
+            (mirrors ``stage_timings["pipeline"]``).
+        total_time_secs: Wall-clock time from first byte to last (includes all overhead).
+        stage_timings: Per-stage timing dict produced by :class:`~client.common.timing.StageTimer`.
+            Keys are stage names (``"preprocess"``, ``"diarization"``, ``"pipeline"``);
+            values are elapsed seconds. Only stages that completed are present, so a failure
+            mid-run shows partial timings. Serialised directly into the JSON report for
+            downstream consumption by ``aggregate_perf.py``.
         output_path: Path to the output video file.
         output_size_bytes: Size of the output file in bytes.
         success: Whether the pipeline completed successfully.
@@ -31,12 +45,17 @@ class BatchResult:
 
     video_name: str
     video_duration_secs: float
+    video_width: int
+    video_height: int
+    video_frame_count: int
     preprocess_time_secs: float
+    diarization_time_secs: float
     pipeline_time_secs: float
     total_time_secs: float
-    output_path: str
-    output_size_bytes: int
-    success: bool
+    stage_timings: dict[str, float] = field(default_factory=dict)
+    output_path: str = ""
+    output_size_bytes: int = 0
+    success: bool = False
     error_message: str | None = None
 
     @property
@@ -48,14 +67,18 @@ class BatchResult:
 
         Examples:
             >>> r = BatchResult(
-            ...     "v.mp4",
-            ...     10.0,
-            ...     1.0,
-            ...     5.0,
-            ...     6.0,
-            ...     "o.mp4",
-            ...     100,
-            ...     True,
+            ...     video_name="v.mp4",
+            ...     video_duration_secs=10.0,
+            ...     video_width=1920,
+            ...     video_height=1080,
+            ...     video_frame_count=300,
+            ...     preprocess_time_secs=1.0,
+            ...     diarization_time_secs=2.0,
+            ...     pipeline_time_secs=5.0,
+            ...     total_time_secs=8.0,
+            ...     output_path="o.mp4",
+            ...     output_size_bytes=100,
+            ...     success=True,
             ... )
             >>> r.realtime_factor
             0.5
@@ -115,44 +138,46 @@ def print_report(results: list[BatchResult]) -> None:
         >>> print_report([result1, result2])  # doctest: +SKIP
     """
     sep = "=" * 72
-    print(f"\n{sep}")
-    print("BATCH PROCESSING REPORT")
-    print(sep)
+    logger.info(f"\n{sep}")
+    logger.info("BATCH PROCESSING REPORT")
+    logger.info(sep)
 
     successful = [r for r in results if r.success]
     failed = [r for r in results if not r.success]
 
     for result in results:
         status = "OK" if result.success else "FAIL"
-        print(f"\n  [{status}] {result.video_name}")
-        print(f"    Duration:    {_fmt_duration(result.video_duration_secs)}")
-        print(f"    Preprocess:  {_fmt_duration(result.preprocess_time_secs)}")
-        print(f"    Pipeline:    {_fmt_duration(result.pipeline_time_secs)}")
-        print(f"    Total:       {_fmt_duration(result.total_time_secs)}")
+        logger.info(f"\n  [{status}] {result.video_name}")
+        logger.info(f"    Duration:    {_fmt_duration(result.video_duration_secs)}")
+        logger.info(f"    Resolution:  {result.video_width}x{result.video_height}")
+        logger.info(f"    Preprocess:  {_fmt_duration(result.preprocess_time_secs)}")
+        logger.info(f"    Diarization: {_fmt_duration(result.diarization_time_secs)}")
+        logger.info(f"    Pipeline:    {_fmt_duration(result.pipeline_time_secs)}")
+        logger.info(f"    Total:       {_fmt_duration(result.total_time_secs)}")
         if result.success:
-            print(f"    RT factor:   {result.realtime_factor:.2f}x")
-            print(f"    Output size: {_fmt_size(result.output_size_bytes)}")
+            logger.info(f"    RT factor:   {result.realtime_factor:.2f}x")
+            logger.info(f"    Output size: {_fmt_size(result.output_size_bytes)}")
         else:
-            print(f"    Error:       {result.error_message}")
+            logger.info(f"    Error:       {result.error_message}")
 
-    print(f"\n{sep}")
-    print("SUMMARY")
-    print(sep)
-    print(f"  Total videos:  {len(results)}")
-    print(f"  Successful:    {len(successful)}")
-    print(f"  Failed:        {len(failed)}")
+    logger.info(f"\n{sep}")
+    logger.info("SUMMARY")
+    logger.info(sep)
+    logger.info(f"  Total videos:  {len(results)}")
+    logger.info(f"  Successful:    {len(successful)}")
+    logger.info(f"  Failed:        {len(failed)}")
 
     if successful:
         avg_rt = sum(r.realtime_factor for r in successful) / len(successful)
         total_dur = sum(r.video_duration_secs for r in successful)
         total_pipe = sum(r.pipeline_time_secs for r in successful)
         total_wall = sum(r.total_time_secs for r in successful)
-        print(f"  Avg RT factor: {avg_rt:.2f}x")
-        print(f"  Total input:   {_fmt_duration(total_dur)}")
-        print(f"  Total pipe:    {_fmt_duration(total_pipe)}")
-        print(f"  Total wall:    {_fmt_duration(total_wall)}")
+        logger.info(f"  Avg RT factor: {avg_rt:.2f}x")
+        logger.info(f"  Total input:   {_fmt_duration(total_dur)}")
+        logger.info(f"  Total pipe:    {_fmt_duration(total_pipe)}")
+        logger.info(f"  Total wall:    {_fmt_duration(total_wall)}")
 
-    print(f"{sep}\n")
+    logger.info(f"{sep}\n")
 
 
 def save_report(
@@ -168,7 +193,7 @@ def save_report(
     Examples:
         >>> save_report([result], "report.json")  # doctest: +SKIP
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    ensure_parent_dir(path=output_path)
 
     successful = [r for r in results if r.success]
     summary = {
@@ -179,6 +204,7 @@ def save_report(
             sum(r.realtime_factor for r in successful) / len(successful) if successful else 0.0
         ),
         "total_input_duration_secs": sum(r.video_duration_secs for r in successful),
+        "total_diarization_time_secs": sum(r.diarization_time_secs for r in successful),
         "total_pipeline_time_secs": sum(r.pipeline_time_secs for r in successful),
         "total_wall_time_secs": sum(r.total_time_secs for r in successful),
     }
@@ -189,4 +215,4 @@ def save_report(
     }
     with open(output_path, "w") as f:
         json.dump(data, f, indent=2)
-    print(f"Report saved to: {output_path}")
+    logger.info(f"Report saved to: {output_path}")

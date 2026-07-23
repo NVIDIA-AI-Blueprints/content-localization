@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
-from base_utils import FileSizeError
-from base_utils import FileUtils
+from common.base_utils import FileSizeError
+from common.base_utils import FileUtils
+
+pytestmark = pytest.mark.unit
 
 
 class TestFileUtils:
@@ -86,13 +88,13 @@ class TestFileUtils:
         chunks = list(FileUtils.read_bytes_in_chunks(filepath))
         assert chunks == []
 
-    @patch("builtins.open", side_effect=IOError("Permission denied"))
+    @patch("builtins.open", side_effect=OSError("Permission denied"))
     def test_write_bytes_io_error(self, mock_open):
         """Test that IOError during write is handled properly."""
         with pytest.raises(IOError, match="Failed to write"):
             FileUtils.write_bytes_to_file("/some/path.bin", iter([b"data"]))
 
-    @patch("builtins.open", side_effect=IOError("Permission denied"))
+    @patch("builtins.open", side_effect=OSError("Permission denied"))
     def test_read_file_bytes_io_error(self, mock_open):
         """Test that IOError during read is handled properly."""
         with pytest.raises(IOError, match="Failed to read"):

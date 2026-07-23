@@ -4,43 +4,48 @@
 """CambAI REST API helpers for the S2S dubbing service.
 
 Provides functions for the three-step file upload flow, dubbing task
-submission, status polling, and output audio retrieval via the CambAI
-public API.
+submission, status polling, and MP3 alt-format output retrieval via the
+CambAI public API.
 """
 
-import mimetypes
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import requests
 
-from base_utils import logger
+from common.audio_utils import audio_mime_type
+from common.base_utils import logger
 
 CAMB_API_BASE_URL = "https://client.camb.ai/apis"
 
 # Polling defaults read from environment at call time
 _DEFAULT_MAX_ATTEMPTS = 120
 _DEFAULT_POLL_INTERVAL = 10
+_ALT_FORMAT_DEFAULT = "mp3"
+_ALT_FORMAT_TERMINAL_STATUSES = {"SUCCESS", "ERROR", "TIMEOUT", "PAYMENT_REQUIRED"}
+_AUDIO_URL_FIELDS = ("output_url", "audio_url", "result_url", "url", "download_url")
 
 
-def _detect_content_type(file_path: Path) -> str:
-    """Detect MIME content type for a local file.
+@dataclass(frozen=True)
+class CambAltFormatPolling:
+    """Polling overrides for CambAI alt-format conversion tasks.
 
     Args:
-        file_path (Path): Path to the file whose content type is needed.
-
-    Returns:
-        str: MIME type string, falling back to ``"application/octet-stream"``
-            when the type cannot be determined.
+        max_attempts (int | None): Maximum polling iterations. ``None`` uses
+            the environment/default behavior from :func:`wait_for_alt_format_completion`.
+        poll_interval_seconds (int | None): Sleep duration between polls.
+            ``None`` uses the environment/default behavior.
 
     Examples:
-        >>> _detect_content_type(Path("audio.wav"))
-        'audio/x-wav'
+        >>> CambAltFormatPolling(max_attempts=5, poll_interval_seconds=1)
+        CambAltFormatPolling(max_attempts=5, poll_interval_seconds=1)
     """
-    guessed_type, _ = mimetypes.guess_type(str(file_path))
-    return guessed_type or "application/octet-stream"
+
+    max_attempts: int | None = None
+    poll_interval_seconds: int | None = None
 
 
 def _request_upload_url(
@@ -155,7 +160,7 @@ def upload_local_file(file_path: Path, headers: dict[str, str]) -> str:
     if not file_path.is_file():
         raise FileNotFoundError(f"Input file not found: {file_path}")
 
-    content_type = _detect_content_type(file_path)
+    content_type = audio_mime_type(file_path)
     logger.info(f"Uploading {file_path} (content_type={content_type})")
 
     file_id, upload_url, upload_headers = _request_upload_url(
@@ -234,6 +239,10 @@ def submit_dub_task(
     return task_id
 
 
+_DNS_RETRY_ATTEMPTS = 3
+_DNS_RETRY_SLEEP_SECS = 5
+
+
 def wait_for_completion(
     task_id: str,
     headers: dict[str, str],
@@ -241,6 +250,10 @@ def wait_for_completion(
     poll_interval_seconds: int | None = None,
 ) -> int:
     """Poll CambAI dubbing status until terminal state and return run ID.
+
+    Each poll retries up to ``_DNS_RETRY_ATTEMPTS`` times on transient
+    network errors (e.g. intermittent DNS failures in Docker) before
+    counting the attempt as a failure.
 
     Args:
         task_id (str): CambAI task ID returned by ``/dub``.
@@ -257,6 +270,7 @@ def wait_for_completion(
         requests.HTTPError: If status endpoint returns a non-2xx response.
         RuntimeError: If CambAI returns a terminal error status.
         TimeoutError: If polling exceeds ``max_attempts``.
+        requests.ConnectionError: If all DNS retries are exhausted on every attempt.
 
     Examples:
         >>> wait_for_completion("task_123", {"x-api-key": "k"})
@@ -272,11 +286,34 @@ def wait_for_completion(
         )
 
     for attempt in range(max_attempts):
-        response = requests.get(
-            f"{CAMB_API_BASE_URL}/dub/{task_id}",
-            headers=headers,
-            timeout=30,
-        )
+        last_conn_err: Exception | None = None
+        for dns_retry in range(_DNS_RETRY_ATTEMPTS):
+            try:
+                response = requests.get(
+                    f"{CAMB_API_BASE_URL}/dub/{task_id}",
+                    headers=headers,
+                    timeout=30,
+                )
+                last_conn_err = None
+                break
+            except requests.ConnectionError as exc:
+                last_conn_err = exc
+                logger.warning(
+                    f"CambAI poll attempt {attempt + 1} DNS retry {dns_retry + 1}"
+                    f"/{_DNS_RETRY_ATTEMPTS}: {exc}"
+                )
+                time.sleep(_DNS_RETRY_SLEEP_SECS)
+
+        if last_conn_err is not None:
+            # All DNS retries exhausted for this poll cycle — count the attempt
+            # as a non-terminal failure so the outer loop keeps going.
+            logger.error(
+                f"CambAI poll attempt {attempt + 1} failed after {_DNS_RETRY_ATTEMPTS}"
+                f" DNS retries: {last_conn_err}"
+            )
+            time.sleep(poll_interval_seconds)
+            continue
+
         response.raise_for_status()
         status_payload = response.json()
         status = str(status_payload.get("status", "")).upper()
@@ -299,36 +336,221 @@ def wait_for_completion(
     )
 
 
-def get_output_audio_url(run_id: int, headers: dict[str, str]) -> str:
-    """Fetch dubbed run metadata and extract the output audio URL.
+def find_audio_url(payload: Any) -> str | None:
+    """Return the first audio URL found in a CambAI response payload.
+
+    Args:
+        payload (Any): JSON-decoded CambAI response.
+
+    Returns:
+        str | None: URL string if one is present.
+
+    Examples:
+        >>> find_audio_url({"output_url": "https://cdn/out.mp3"})
+        'https://cdn/out.mp3'
+    """
+    if isinstance(payload, dict):
+        for key in _AUDIO_URL_FIELDS:
+            value = payload.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                return value
+        for value in payload.values():
+            nested_url = find_audio_url(value)
+            if nested_url:
+                return nested_url
+    elif isinstance(payload, list):
+        for item in payload:
+            nested_url = find_audio_url(item)
+            if nested_url:
+                return nested_url
+    return None
+
+
+def request_dub_alt_format(
+    run_id: int,
+    language: str,
+    headers: dict[str, str],
+    output_format: str = _ALT_FORMAT_DEFAULT,
+) -> dict[str, Any]:
+    """Request CambAI dubbing output in an alternate format.
 
     Args:
         run_id (int): CambAI run ID returned by status polling.
+        language (str): CambAI target language ID or locale tag for the run.
         headers (dict[str, str]): HTTP headers including ``x-api-key``.
+        output_format (str): Requested output container. Defaults to ``"mp3"``.
 
     Returns:
-        str: Output audio URL from the CambAI dub-result endpoint.
+        dict[str, Any]: JSON response from ``/dub-alt-format``. CambAI may return
+            either an ``output_url`` immediately or a ``task_id`` to poll.
 
     Raises:
         requests.HTTPError: If the endpoint returns a non-2xx response.
-        RuntimeError: If the response does not contain a valid audio URL.
+        RuntimeError: If the response is not a JSON object.
 
     Examples:
-        >>> get_output_audio_url(42, {"x-api-key": "k"})
-        'https://.../dubbed_audio.mp3'
+        >>> request_dub_alt_format(42, "54", {"x-api-key": "k"})
+        {'task_id': 'task_123'}
     """
-    response = requests.get(
-        f"{CAMB_API_BASE_URL}/dub-result/{run_id}",
+    response = requests.post(
+        f"{CAMB_API_BASE_URL}/dub-alt-format/{run_id}/{language}",
         headers=headers,
-        timeout=30,
+        json={"output_format": output_format},
+        timeout=60,
     )
     response.raise_for_status()
     payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"CambAI dub-alt-format response must be a JSON object: {payload}")
+    return payload
 
-    # CambAI may return either output_audio_url or audio_url
-    audio_url = payload.get("output_audio_url") or payload.get("audio_url")
-    if not isinstance(audio_url, str) or not audio_url:
-        raise RuntimeError(f"CambAI dub-result missing audio URL: {payload}")
+
+def _alt_status_from_payload(payload: Any) -> str:
+    """Extract an uppercase alt-format status string from a CambAI response."""
+    if isinstance(payload, dict):
+        return str(payload.get("status", "")).upper()
+    return str(payload).upper()
+
+
+def wait_for_alt_format_completion(
+    task_id: str,
+    headers: dict[str, str],
+    max_attempts: int | None = None,
+    poll_interval_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Poll CambAI alt-format task status until it reaches a terminal state.
+
+    Args:
+        task_id (str): CambAI alt-format task ID.
+        headers (dict[str, str]): HTTP headers including ``x-api-key``.
+        max_attempts (int | None): Maximum polling iterations. Reads
+            ``S2S_CAMB_ALT_FORMAT_MAX_ATTEMPTS`` or the dubbing default when
+            ``None``.
+        poll_interval_seconds (int | None): Sleep duration between polls. Reads
+            ``S2S_CAMB_ALT_FORMAT_POLL_INTERVAL`` or the dubbing default when
+            ``None``.
+
+    Returns:
+        dict[str, Any]: JSON response from the terminal status call.
+
+    Raises:
+        requests.HTTPError: If status endpoint returns a non-2xx response.
+        RuntimeError: If CambAI returns a terminal error status.
+        TimeoutError: If polling exceeds ``max_attempts``.
+
+    Examples:
+        >>> wait_for_alt_format_completion("task_123", {"x-api-key": "k"})
+        {'status': 'SUCCESS'}
+    """
+    if max_attempts is None:
+        max_attempts = int(
+            os.environ.get(
+                "S2S_CAMB_ALT_FORMAT_MAX_ATTEMPTS",
+                os.environ.get("S2S_CAMB_DUBBING_MAX_ATTEMPTS", str(_DEFAULT_MAX_ATTEMPTS)),
+            )
+        )
+    if poll_interval_seconds is None:
+        poll_interval_seconds = int(
+            os.environ.get(
+                "S2S_CAMB_ALT_FORMAT_POLL_INTERVAL",
+                os.environ.get("S2S_CAMB_DUBBING_POLL_INTERVAL", str(_DEFAULT_POLL_INTERVAL)),
+            )
+        )
+
+    for attempt in range(max_attempts):
+        response = requests.get(
+            f"{CAMB_API_BASE_URL}/dub-alt-format/{task_id}",
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        status = _alt_status_from_payload(payload)
+        logger.debug(f"CambAI alt-format status (attempt {attempt + 1}): {status}")
+
+        if status == "SUCCESS":
+            return payload if isinstance(payload, dict) else {"status": status}
+        if status in _ALT_FORMAT_TERMINAL_STATUSES:
+            message = payload.get("message") if isinstance(payload, dict) else None
+            raise RuntimeError(f"CambAI alt-format failed with status={status}, message={message}")
+
+        time.sleep(poll_interval_seconds)
+
+    raise TimeoutError(
+        f"CambAI alt-format timed out after {max_attempts} attempts "
+        f"(interval={poll_interval_seconds}s)."
+    )
+
+
+def get_alt_format_output_audio_url(
+    run_id: int,
+    language: str,
+    headers: dict[str, str],
+    output_format: str = _ALT_FORMAT_DEFAULT,
+    polling: CambAltFormatPolling | None = None,
+) -> str:
+    """Get a CambAI dubbed output URL in the requested alternate format.
+
+    CambAI may return the MP3 URL immediately or return an async task ID. In
+    live testing, a completed async task can report ``SUCCESS`` without an URL;
+    in that case, repeating the same alt-format request returns the cached
+    ``output_url``.
+
+    Args:
+        run_id (int): CambAI run ID returned by dubbing status polling.
+        language (str): CambAI target language ID or locale tag for the run.
+        headers (dict[str, str]): HTTP headers including ``x-api-key``.
+        output_format (str): Requested output container. Defaults to ``"mp3"``.
+        polling (CambAltFormatPolling | None): Optional polling override for
+            async alt-format tasks.
+
+    Returns:
+        str: Downloadable output audio URL.
+
+    Raises:
+        RuntimeError: If CambAI never returns an output URL.
+
+    Examples:
+        >>> get_alt_format_output_audio_url(42, "54", {"x-api-key": "k"})
+        'https://.../output_audio.mp3'
+    """
+    payload = request_dub_alt_format(
+        run_id=run_id,
+        language=language,
+        headers=headers,
+        output_format=output_format,
+    )
+    audio_url = find_audio_url(payload)
+    if audio_url:
+        return audio_url
+
+    task_id = payload.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise RuntimeError(f"CambAI dub-alt-format response missing output URL/task ID: {payload}")
+
+    polling = polling or CambAltFormatPolling()
+    status_payload = wait_for_alt_format_completion(
+        task_id=task_id,
+        headers=headers,
+        max_attempts=polling.max_attempts,
+        poll_interval_seconds=polling.poll_interval_seconds,
+    )
+    audio_url = find_audio_url(status_payload)
+    if audio_url:
+        return audio_url
+
+    refreshed_payload = request_dub_alt_format(
+        run_id=run_id,
+        language=language,
+        headers=headers,
+        output_format=output_format,
+    )
+    audio_url = find_audio_url(refreshed_payload)
+    if not audio_url:
+        raise RuntimeError(
+            "CambAI dub-alt-format completed but did not return an output URL: "
+            f"status_payload={status_payload}, refreshed_payload={refreshed_payload}"
+        )
     return audio_url
 
 

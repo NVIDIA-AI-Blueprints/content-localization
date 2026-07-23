@@ -8,7 +8,7 @@ from nvidia.ai4m.video.v1.video_pb2 import LossyEncoding
 from nvidia.ai4m.video.v1.video_pb2 import VideoEncoding
 
 from client.lipsync.config import LipSyncConfig
-from client.utils import create_protobuf_any_value
+from common.proto_utils import create_protobuf_any_value
 
 
 def create_custom_encoding_params(params: dict) -> CustomEncodingParams:

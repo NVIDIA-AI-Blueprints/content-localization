@@ -3,14 +3,29 @@
 
 """Tests for audio simulators module."""
 
+import gc
 import tempfile
 import wave
 from pathlib import Path
 
 import pytest
-from source_simulators.audio import AudioSinkSimulator
-from source_simulators.audio import AudioSourceSimulator
-from source_simulators.audio import BaseFileSimulator
+
+from common.source_sink.base import BaseFileSimulator
+from common.source_sink.grpc.audio import AudioSinkSimulator
+from common.source_sink.grpc.audio import AudioSourceSimulator
+
+pytestmark = pytest.mark.unit
+
+
+def _assert_no_unraisable_warning(recwarn) -> None:
+    gc.collect()
+    unraisable = [
+        warning
+        for warning in recwarn
+        if issubclass(warning.category, pytest.PytestUnraisableExceptionWarning)
+    ]
+    if unraisable:
+        pytest.fail(f"Unexpected unraisable warning(s): {unraisable}")
 
 
 class TestBaseFileSimulator:
@@ -202,10 +217,11 @@ class TestAudioSinkSimulator:
             # Should not raise an exception
             simulator.validate_file_path(str(output_path))
 
-    def test_validate_file_path_with_invalid_directory(self):
+    def test_validate_file_path_with_invalid_directory(self, recwarn):
         """Test validate_file_path with invalid directory."""
         with pytest.raises(FileNotFoundError):
             AudioSinkSimulator(file_path="nonexistent/output.wav")
+        _assert_no_unraisable_warning(recwarn)
 
     def test_write_method(self):
         """Test write method processes audio data correctly."""
@@ -328,7 +344,7 @@ class TestAudioSinkSimulator:
                 data = f.read()
                 assert len(data) > 0, "MP3 file should not be empty"
 
-    def test_invalid_audio_format(self):
+    def test_invalid_audio_format(self, recwarn):
         """Test AudioSinkSimulator with invalid audio format."""
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "output.ogg"
@@ -344,6 +360,7 @@ class TestAudioSinkSimulator:
                     chunk_duration_secs=0.128,
                     audio_format="ogg",  # Unsupported format
                 )
+            _assert_no_unraisable_warning(recwarn)
 
     def test_audio_format_case_insensitive(self):
         """Test that audio format is case insensitive."""

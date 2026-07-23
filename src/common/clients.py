@@ -7,15 +7,15 @@ Example::
 
     from common.buffers import Buffer
     from common.clients import Client
-    from common.service import GRPCInferenceServer
+    from common.service import GRPCInferenceHandle
 
 
     # Upstream code populates the request buffer; the client will set done=True when finished
     request_buffer: Buffer[int] = Buffer()
     output_buffer: Buffer[str] = Buffer()
-    server = GRPCInferenceServer(...)  # concrete server instance
+    handle = GRPCInferenceHandle(...)  # concrete handle instance
 
-    client = Client(server)
+    client = Client(handle)
     client(
         request_iterator=request_buffer,
         output_buffer=output_buffer,
@@ -34,9 +34,9 @@ from typing import TypeVar
 
 import grpc
 
-from base_utils import logger
+from common.base_utils import logger
 from common.buffers import Buffer
-from common.service import GRPCInferenceServer
+from common.service import GRPCInferenceHandle
 
 ReqT = TypeVar("ReqT")
 RespT = TypeVar("RespT")
@@ -55,32 +55,33 @@ class Client(ABC, Generic[ReqT, RespT]):
 
     def __init__(
         self,
-        server: GRPCInferenceServer,
+        handle: GRPCInferenceHandle,
     ) -> None:
-        """Initialize a client that streams server responses into an output buffer.
+        """Initialize a client that streams service responses into an output buffer.
 
         Args:
-            server: GRPCInferenceServer used to create the response iterator.
+            handle: GRPCInferenceHandle used to create the response iterator.
         """
-        self.server = server
-        logger.debug(f"Client initialized with server: {server}")
+        self.handle = handle
+        logger.debug(f"Client initialized with handle: {handle}")
 
     def is_healthy(self) -> bool:
-        """Check if the inference server is healthy.
+        """Check if the remote inference service is healthy.
 
         Returns:
-            bool: True if the server is healthy, False otherwise.
+            bool: True when the service is healthy. This method never returns False —
+                an unhealthy service raises instead.
 
         Raises:
-            ConnectionError: If the server is not healthy.
+            ConnectionError: If the service is not healthy.
         """
-        logger.debug(f"Checking health of server: {self.server}")
+        logger.debug(f"Checking health of service at {self.handle}")
         try:
-            self.server.is_healthy()
+            self.handle.is_healthy()
         except ConnectionError as e:
-            logger.error(f"Server at {self.server} is not healthy: {e}\n" + traceback.format_exc())
+            logger.error(f"Service at {self.handle} is not healthy: {e}\n" + traceback.format_exc())
             raise e
-        logger.debug(f"Server {self.server} is healthy")
+        logger.debug(f"Service at {self.handle} is healthy")
         return True
 
     def __call__(
@@ -89,37 +90,41 @@ class Client(ABC, Generic[ReqT, RespT]):
         output_buffer: Buffer[RespT],
         context: grpc.ServicerContext,
         request_id: str,
-        *args: tuple[object, ...],
         **kwargs: Any,
     ) -> None:
         """Run the client by streaming responses into the output buffer.
 
+        The health check runs inside the try/finally so that ``output_buffer.done``
+        is set on every exit path and downstream consumers always observe stream
+        completion.
+
         Args:
             request_iterator: Inbound requests (buffer, generator, or gRPC iterator).
-            output_buffer: Buffer receiving server responses. Client doesn't own buffer.
+            output_buffer: Buffer receiving service responses. Client doesn't own buffer.
             context: gRPC servicer context.
             request_id: Correlation identifier.
-            *args: Additional positional arguments forwarded to ``_impl``.
             **kwargs: Additional keyword arguments forwarded to ``_impl``.
 
         Returns:
             None. ``output_buffer`` is populated in place.
         """
         logger.debug(f"Client __call__ invoked: request_id={request_id}")
-        if not self.is_healthy():
-            logger.error(f"Server at {self.server} is not healthy")
-            context.abort(grpc.StatusCode.INTERNAL, f"Server at {self.server} is not healthy")
         try:
+            # is_healthy() raises ConnectionError on failure (never returns False).
+            self.is_healthy()
             logger.debug(f"Starting _impl for request_id={request_id}")
             self._impl(
                 request_iterator=request_iterator,
                 output_buffer=output_buffer,
                 context=context,
                 request_id=request_id,
-                *args,
                 **kwargs,
             )
             logger.debug(f"Completed _impl for request_id={request_id}")
+        except ConnectionError as e:
+            tb = traceback.format_exc()
+            logger.error(f"Service at {self.handle} is not healthy: {e}\n{tb}")
+            context.abort(grpc.StatusCode.UNAVAILABLE, f"{type(e).__name__}: {e}\n{tb}")
         except Exception as e:
             tb = traceback.format_exc()
             logger.error(f"Error running client: {e}\n{tb}")
@@ -135,20 +140,23 @@ class Client(ABC, Generic[ReqT, RespT]):
         output_buffer: Buffer[RespT],
         context: grpc.ServicerContext,
         request_id: str,
-        *args: tuple[object, ...],
         **kwargs: Any,
     ) -> None:
         """Implement client-specific logic to produce responses.
+
+        Exceptions raised here propagate to ``__call__``, which logs, aborts the
+        context exactly once, and marks the output buffer done. Subclasses must not
+        call ``context.abort`` themselves; ``__call__`` owns error reporting.
 
         Args:
             request_iterator: Inbound requests to consume.
             output_buffer: Destination buffer for responses.
             context: gRPC servicer context.
             request_id: Correlation identifier.
-            *args: Additional positional arguments.
             **kwargs: Additional keyword arguments.
 
         Returns:
-            None. Subclasses must place results into ``output_buffer`` and sets buffer ``done``.
+            None. Subclasses must place results into ``output_buffer``; ``__call__``
+            owns setting the buffer ``done``.
         """
         raise NotImplementedError

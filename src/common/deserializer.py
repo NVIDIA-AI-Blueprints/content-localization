@@ -40,7 +40,7 @@ from collections.abc import Iterator
 from typing import Generic
 from typing import TypeVar
 
-from base_utils import logger
+from common.base_utils import logger
 
 T = TypeVar("T")
 

@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: S101,PLR2004
 
 """Unit tests for ASD diarization JSON loading compatibility."""
 
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from client.asd.diarization import load_diarization_info
+from client.common.diarization import load_diarization_info
 
 pytestmark = pytest.mark.unit
 
@@ -51,57 +52,8 @@ def test_load_diarization_info_with_flat_format(tmp_path: Path) -> None:
     assert diarization_info.transcript == "hello world"
 
 
-def test_load_diarization_info_with_riva_native_format(tmp_path: Path) -> None:
-    """Riva-native diarization JSON parses into AudioDiarizationInfo."""
-    diarization_path = tmp_path / "riva_diarization.json"
-    diarization_path.write_text(
-        json.dumps(
-            {
-                "results": [
-                    {
-                        "alternatives": [
-                            {
-                                "transcript": "hello world",
-                                "words": [
-                                    {
-                                        "startTime": 320,
-                                        "endTime": 400,
-                                        "word": "hello",
-                                        "languageCode": "en-US",
-                                        "speakerTag": 0,
-                                    },
-                                    {
-                                        "startTime": 640,
-                                        "endTime": 800,
-                                        "word": "world",
-                                        "speakerTag": 1,
-                                    },
-                                ],
-                                "languageCode": ["en-US"],
-                            }
-                        ]
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    diarization_info = load_diarization_info(str(diarization_path), diarization_format="riva")
-
-    assert diarization_info is not None
-    assert len(diarization_info.segments) == 2
-    assert diarization_info.segments[0].start_time == 320
-    assert diarization_info.segments[0].end_time == 400
-    assert diarization_info.segments[0].speaker_id == 0
-    assert diarization_info.segments[0].language_code == "en-US"
-    assert diarization_info.segments[1].speaker_id == 1
-    assert diarization_info.segments[1].language_code == "en-US"
-    assert diarization_info.transcript == "hello world"
-
-
-def test_load_diarization_info_with_elevenlabs_format(tmp_path: Path) -> None:
-    """ElevenLabs STT diarization JSON parsed correctly with explicit format."""
+def test_load_diarization_info_with_elevenlabs_scribe_format(tmp_path: Path) -> None:
+    """ElevenLabs Scribe STT diarization JSON parsed correctly with explicit format."""
     diarization_path = tmp_path / "el_diarization.json"
     diarization_path.write_text(
         json.dumps(
@@ -143,7 +95,10 @@ def test_load_diarization_info_with_elevenlabs_format(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    diarization_info = load_diarization_info(str(diarization_path), diarization_format="elevenlabs")
+    diarization_info = load_diarization_info(
+        str(diarization_path),
+        diarization_format="elevenlabs-scribe",
+    )
 
     assert diarization_info is not None
     # Only "word" type entries are included (spacing is filtered out)
@@ -160,8 +115,8 @@ def test_load_diarization_info_with_elevenlabs_format(tmp_path: Path) -> None:
     assert diarization_info.transcript == "hello world"
 
 
-def test_load_diarization_info_with_elevenlabs_format_explicit(tmp_path: Path) -> None:
-    """Explicit diarization_format='elevenlabs' forces the ElevenLabs parser."""
+def test_load_diarization_info_with_elevenlabs_scribe_format_explicit(tmp_path: Path) -> None:
+    """Explicit diarization_format='elevenlabs-scribe' forces the Scribe parser."""
     diarization_path = tmp_path / "el_diarization.json"
     diarization_path.write_text(
         json.dumps(
@@ -183,7 +138,10 @@ def test_load_diarization_info_with_elevenlabs_format_explicit(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    diarization_info = load_diarization_info(str(diarization_path), diarization_format="elevenlabs")
+    diarization_info = load_diarization_info(
+        str(diarization_path),
+        diarization_format="elevenlabs-scribe",
+    )
 
     assert diarization_info is not None
     assert len(diarization_info.segments) == 1
@@ -192,38 +150,118 @@ def test_load_diarization_info_with_elevenlabs_format_explicit(tmp_path: Path) -
     assert diarization_info.segments[0].end_time == 300
 
 
-def test_load_diarization_info_with_explicit_riva_format(tmp_path: Path) -> None:
-    """Explicit diarization_format='riva' forces the RIVA parser."""
-    diarization_path = tmp_path / "riva_diarization.json"
+@pytest.mark.parametrize(
+    ("language_code", "speaker_id", "expected_speaker"),
+    [
+        ("en", "speaker_0", 0),
+        ("es", "speaker_3", 3),
+    ],
+)
+def test_load_diarization_info_with_elevenlabs_dubbing_api_format(
+    tmp_path: Path,
+    language_code: str,
+    speaker_id: str,
+    expected_speaker: int,
+) -> None:
+    """ElevenLabs Dubbing Transcript API JSON parses with the explicit format."""
+    diarization_path = tmp_path / f"el_dubbing_{language_code}.json"
     diarization_path.write_text(
         json.dumps(
             {
-                "results": [
+                "language": language_code,
+                "utterances": [
                     {
-                        "alternatives": [
+                        "text": "hello there",
+                        "speaker_id": speaker_id,
+                        "start_s": 0.25,
+                        "end_s": 1.5,
+                        "words": [
                             {
-                                "words": [
-                                    {
-                                        "startTime": 100,
-                                        "endTime": 200,
-                                        "word": "ok",
-                                        "speakerTag": 0,
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
+                                "text": "hello",
+                                "word_type": "word",
+                                "start_s": 0.25,
+                                "end_s": 0.7,
+                            },
+                            {
+                                "text": "there",
+                                "word_type": "word",
+                                "start_s": 0.8,
+                                "end_s": 1.5,
+                            },
+                        ],
+                    },
+                    {
+                        "text": "goodbye",
+                        "speaker_id": "speaker_1",
+                        "start_s": 2.0,
+                        "end_s": 2.75,
+                        "words": [],
+                    },
+                ],
             }
         ),
         encoding="utf-8",
     )
 
-    diarization_info = load_diarization_info(str(diarization_path), diarization_format="riva")
+    diarization_info = load_diarization_info(
+        diarization_file=str(diarization_path),
+        diarization_format="elevenlabs-dubbing-api",
+    )
 
     assert diarization_info is not None
-    assert len(diarization_info.segments) == 1
-    assert diarization_info.segments[0].word == "ok"
+    assert len(diarization_info.segments) == 2
+    assert diarization_info.segments[0].start_time == 250
+    assert diarization_info.segments[0].end_time == 1500
+    assert diarization_info.segments[0].speaker_id == expected_speaker
+    assert diarization_info.segments[0].word == "hello there"
+    assert diarization_info.segments[0].language_code == language_code
+    assert diarization_info.segments[1].start_time == 2000
+    assert diarization_info.segments[1].end_time == 2750
+    assert diarization_info.segments[1].speaker_id == 1
+    assert diarization_info.segments[1].word == "goodbye"
+    assert diarization_info.segments[1].language_code == language_code
+    assert diarization_info.transcript == "hello there goodbye"
+
+
+def test_elevenlabs_dubbing_api_json_requires_new_format(tmp_path: Path) -> None:
+    """Dubbing Transcript API JSON is intentionally separate from STT JSON."""
+    diarization_path = tmp_path / "el_dubbing.json"
+    diarization_path.write_text(
+        json.dumps(
+            {
+                "language": "es",
+                "utterances": [
+                    {
+                        "text": "hola",
+                        "speaker_id": "speaker_0",
+                        "start_s": 0.0,
+                        "end_s": 1.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="expected 'words' to be a list"):
+        load_diarization_info(
+            diarization_file=str(diarization_path),
+            diarization_format="elevenlabs-scribe",
+        )
+
+
+def test_elevenlabs_dubbing_api_format_missing_utterances_raises(
+    tmp_path: Path,
+) -> None:
+    """Dubbing Transcript API JSON must include a top-level utterances list."""
+    diarization_path = tmp_path / "el_dubbing_invalid.json"
+    diarization_path.write_text(json.dumps({"language": "es"}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'utterances' to be a list"):
+        load_diarization_info(
+            diarization_file=str(diarization_path),
+            diarization_format="elevenlabs-dubbing-api",
+        )
 
 
 def test_load_diarization_info_invalid_format_value(tmp_path: Path) -> None:
@@ -325,8 +363,8 @@ def test_wrong_format_flat_with_dict_raises_error(tmp_path: Path) -> None:
         load_diarization_info(str(diarization_path), diarization_format="flat")
 
 
-def test_wrong_format_elevenlabs_with_list_raises_error(tmp_path: Path) -> None:
-    """Passing format='elevenlabs' with list data raises ValueError."""
+def test_wrong_format_elevenlabs_scribe_with_list_raises_error(tmp_path: Path) -> None:
+    """Passing format='elevenlabs-scribe' with list data raises ValueError."""
     diarization_path = tmp_path / "flat_data.json"
     diarization_path.write_text(
         json.dumps([{"start_time": 0, "end_time": 100, "speaker_id": 0}]),
@@ -334,12 +372,12 @@ def test_wrong_format_elevenlabs_with_list_raises_error(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="Invalid ElevenLabs diarization JSON"):
-        load_diarization_info(str(diarization_path), diarization_format="elevenlabs")
+        load_diarization_info(str(diarization_path), diarization_format="elevenlabs-scribe")
 
 
 def test_wrong_format_camb_with_dict_raises_error(tmp_path: Path) -> None:
     """Passing format='camb' with dict data raises ValueError."""
-    diarization_path = tmp_path / "riva_data.json"
+    diarization_path = tmp_path / "dict_data.json"
     diarization_path.write_text(
         json.dumps({"results": []}),
         encoding="utf-8",
@@ -347,15 +385,3 @@ def test_wrong_format_camb_with_dict_raises_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Invalid Camb AI diarization JSON"):
         load_diarization_info(str(diarization_path), diarization_format="camb")
-
-
-def test_wrong_format_riva_with_list_raises_error(tmp_path: Path) -> None:
-    """Passing format='riva' with list data raises ValueError."""
-    diarization_path = tmp_path / "flat_data.json"
-    diarization_path.write_text(
-        json.dumps([{"start_time": 0, "end_time": 100, "speaker_id": 0}]),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="Invalid Riva diarization JSON"):
-        load_diarization_info(str(diarization_path), diarization_format="riva")

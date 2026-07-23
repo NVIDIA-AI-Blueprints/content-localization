@@ -65,7 +65,7 @@ message BackgroundAudioConfig{
   // If false or unset, only the main audio will be used.
   optional bool is_background_audio_provided = 1;
   // Background audio's codec
-  optional ai4m.audio.v1.AudioCodec audio_codec = 2;
+  optional nvidia.ai4m.audio.v1.AudioCodec audio_codec = 2;
   // Background audio volume to be used for mixing.
   // 0: Background audio is not included.
   // 1: Background audio is included at its full, original volume.
@@ -78,7 +78,7 @@ message BackgroundAudioConfig{
 // lip sync animation
 message LipsyncConfig {
   // Codec of the input audio (wav or mp3)
-  ai4m.audio.v1.AudioCodec input_audio_codec = 1;
+  nvidia.ai4m.audio.v1.AudioCodec input_audio_codec = 1;
   // Indicates whether speaker information is provided by the user
   // If true, the user provides speaker bounding boxes and metadata
   // If false or unset, the system will auto-detect faces
@@ -88,9 +88,9 @@ message LipsyncConfig {
   // How to handle longer audio than video
   optional ExtendVideo extend_video = 4;
   // Output video encoding parameters
-  optional ai4m.video.v1.VideoEncoding output_video_encoding = 5;
+  optional nvidia.ai4m.video.v1.VideoEncoding output_video_encoding = 5;
   // Output video's audio codec
-  optional ai4m.audio.v1.AudioCodec output_audio_codec = 6;
+  optional nvidia.ai4m.audio.v1.AudioCodec output_audio_codec = 6;
   // Speed of head movement in input video
   // 0 for static/slow-moving head, 1 for fast-moving head
   optional uint32 head_movement_speed = 7;
@@ -103,7 +103,7 @@ message LipsyncConfig {
 message SpeakerInfo {
   // Bounding box coordinates defining the rectangular region
   // containing the speaker's face
-  ai4m.common.v1.BoundingBox speaker_bbox = 1;
+  nvidia.ai4m.common.v1.BoundingBox speaker_bbox = 1;
   // Unique identifier for this speaker across frames
   optional int32 speaker_id = 2;
   // Flag indicating whether the speaker is currently speaking

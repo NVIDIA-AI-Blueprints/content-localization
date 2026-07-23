@@ -1,0 +1,21 @@
+version: v1
+# Lint/breaking config for the proto module rooted at this directory. Imports
+# resolve as nvidia/ai4m/... (see protos/generate_protos.sh --proto_path=protos),
+# so this buf.yaml must live at the module root. Linted in CI via
+# `buf lint protos` (advisory: the job is allow_failure).
+#
+# BASIC (not STANDARD) is used because the NIM-style RPCs intentionally share
+# request/response message names (for example SpeechToSpeechRequest) rather than
+# the per-RPC <Method>Request/<Method>Response names STANDARD enforces. The
+# vendored gRPC health proto lives outside its package directory, so it is
+# excluded from both lint and breaking checks.
+lint:
+  use:
+    - BASIC
+  ignore:
+    - health.proto
+breaking:
+  use:
+    - FILE
+  ignore:
+    - health.proto

@@ -47,39 +47,36 @@ split ``ContentLocalizationRequest`` packets into ``audio_buffer``,
 ``translated_audio_buffer``, ``controller_config_buffer``, and
 per-service config buffers.
 
-Servers (``common.servers``)
+Handles (``common.handles``)
 ============================
 
-Health-check abstractions for reaching peer services:
+Client-side handles for reaching peer services:
 
-``HTTPServer`` wraps an HTTP endpoint and exposes ``is_healthy()``
-(sends ``GET /v2/health/ready``). Timeout is controlled by the
-``HEALTH_CHECK_TIMEOUT`` environment variable.
-
-``GRPCServer`` probes a gRPC endpoint using the standard
-``grpc_health.v1`` health-checking protocol.
-
-Both classes provide a ``from_string(url)`` factory method.
+``GRPCServiceHandle`` names a remote gRPC endpoint and probes it using
+the standard ``grpc_health.v1`` health-checking protocol via
+``is_healthy()``. Timeout is controlled by the
+``HEALTH_CHECK_TIMEOUT`` environment variable. A ``from_string(url)``
+factory method parses ``host:port`` strings.
 
 Inference Service (``common.service``)
 ======================================
 
-``GRPCInferenceServer`` combines ``GRPCServer`` with an
-``InferenceServer`` interface. It manages a gRPC channel and stub, and
-exposes an abstract ``get_response_iterator(request_iterator)`` that
-subclasses implement to call a specific RPC.
+``GRPCInferenceHandle`` extends ``GRPCServiceHandle`` with channel and
+stub management (``connect()``/``close()``), and exposes an abstract
+``get_response_iterator(request_iterator)`` that subclasses implement
+to call a specific RPC.
 
 Concrete implementations live in ``common.nims``:
 
-- ``SpeechToSpeechServer`` -- calls ``StreamSpeechToSpeech``
-- ``ActiveSpeakerDetectionServer`` -- calls ``DetectActiveSpeaker``
-- ``LipsyncServer`` -- calls ``Animate``
+- ``SpeechToSpeechHandle`` -- calls ``StreamSpeechToSpeech``
+- ``ActiveSpeakerDetectionHandle`` -- calls ``DetectActiveSpeaker``
+- ``LipsyncHandle`` -- calls ``Lipsync``
 
 Clients (``common.clients``)
 =============================
 
 ``Client[ReqT, RespT]`` is an abstract class that reads requests from
-an iterator, sends them to a ``GRPCInferenceServer``, and writes
+an iterator, sends them through a ``GRPCInferenceHandle``, and writes
 responses into an output ``Buffer``. It sets ``output_buffer.done = True``
 automatically when the stream finishes. Subclasses implement
 ``_impl()`` for service-specific logic (e.g., filtering keepalive

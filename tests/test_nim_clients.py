@@ -28,30 +28,54 @@ from common.nims import SpeechToSpeechClient
 pytestmark = pytest.mark.unit
 
 
-class _FakeServer:
+class _FakeHandle:
     def __init__(self, responses: list[object]) -> None:
         self.stub = None
         self._responses = responses
-        self.create_called = 0
+        self.connect_called = 0
 
     def is_healthy(self) -> bool:
         return True
 
-    def create_server(self) -> None:
+    def connect(self) -> None:
         self.stub = object()
-        self.create_called += 1
+        self.connect_called += 1
 
     def get_response_iterator(self, request_iterator: Iterator[object]) -> Iterator[object]:
         _ = list(request_iterator)
         return iter(self._responses)
 
 
+class _MidStreamFailureHandle(_FakeHandle):
+    """Handle whose response stream raises after yielding its responses."""
+
+    def get_response_iterator(self, request_iterator: Iterator[object]) -> Iterator[object]:
+        _ = list(request_iterator)
+
+        def _iter() -> Iterator[object]:
+            yield from self._responses
+            raise RuntimeError("NIM stream died")
+
+        return _iter()
+
+
+class _RaisingAbortContext:
+    """Context stub whose abort raises, matching real gRPC semantics."""
+
+    def __init__(self) -> None:
+        self.abort_calls: list[tuple[object, str]] = []
+
+    def abort(self, code: object, details: str) -> None:
+        self.abort_calls.append((code, details))
+        raise RuntimeError(f"Aborted: {code}")
+
+
 class TestNimClients(unittest.TestCase):
     """Unit tests for NIM client buffer behavior."""
 
     def _run_client(self, client_cls: type, responses: list[object]) -> list[object]:
-        server = _FakeServer(responses=responses)
-        client = client_cls(server)
+        handle = _FakeHandle(responses=responses)
+        client = client_cls(handle)
         context = MagicMock(spec=grpc.ServicerContext)
         output_buffer: Buffer[object] = Buffer()
 
@@ -65,14 +89,14 @@ class TestNimClients(unittest.TestCase):
             context=context,
             request_id="r1",
         )
-        self.assertEqual(server.create_called, 1)
+        self.assertEqual(handle.connect_called, 1)
         self.assertTrue(output_buffer.done)
         return list(RequestIteratorFromBuffer(output_buffer, poll_timeout=0.01))
 
     def _run_client_with_stub(self, client_cls: type, responses: list[object]) -> list[object]:
-        server = _FakeServer(responses=responses)
-        server.stub = object()
-        client = client_cls(server)
+        handle = _FakeHandle(responses=responses)
+        handle.stub = object()
+        client = client_cls(handle)
         context = MagicMock(spec=grpc.ServicerContext)
         output_buffer: Buffer[object] = Buffer()
 
@@ -85,7 +109,7 @@ class TestNimClients(unittest.TestCase):
             context=context,
             request_id="r2",
         )
-        self.assertEqual(server.create_called, 0)
+        self.assertEqual(handle.connect_called, 0)
         self.assertTrue(output_buffer.done)
         return list(RequestIteratorFromBuffer(output_buffer, poll_timeout=0.01))
 
@@ -118,8 +142,8 @@ class TestNimClients(unittest.TestCase):
         buffered = self._run_client(LipsyncClient, responses)
         self.assertEqual(len(buffered), 1)
 
-    def test_clients_skip_create_server_when_stub_exists(self) -> None:
-        """Clients do not recreate server when stub already exists."""
+    def test_clients_skip_connect_when_stub_exists(self) -> None:
+        """Clients do not reconnect when a stub already exists."""
         responses = [
             SpeechToSpeechResponse(audio_data=b"chunk1"),
             SpeechToSpeechResponse(audio_data=b"chunk2"),
@@ -127,8 +151,45 @@ class TestNimClients(unittest.TestCase):
         buffered = self._run_client_with_stub(SpeechToSpeechClient, responses)
         self.assertEqual(len(buffered), 2)
 
+    def test_mid_stream_failure_aborts_once_with_original_details(self) -> None:
+        """A mid-stream NIM failure aborts the context exactly once.
+
+        The abort details carry the originating error so callers see the root
+        cause of the stream failure.
+        """
+        cases = [
+            (SpeechToSpeechClient, SpeechToSpeechResponse(audio_data=b"chunk1")),
+            (
+                ActiveSpeakerDetectionClient,
+                DetectActiveSpeakerResponse(
+                    active_speaker_detection_result=ActiveSpeakerDetectionResult(frame_id=0)
+                ),
+            ),
+            (LipsyncClient, LipsyncResponse(video_file_data=b"frame")),
+        ]
+        for client_cls, response in cases:
+            with self.subTest(client=client_cls.__name__):
+                handle = _MidStreamFailureHandle(responses=[response])
+                client = client_cls(handle)
+                context = _RaisingAbortContext()
+                output_buffer: Buffer[object] = Buffer()
+
+                with self.assertRaises(RuntimeError):
+                    client(
+                        request_iterator=iter([object()]),
+                        output_buffer=output_buffer,
+                        context=context,
+                        request_id="r-fail",
+                    )
+
+                self.assertTrue(output_buffer.done)
+                self.assertEqual(len(context.abort_calls), 1)
+                _, details = context.abort_calls[0]
+                self.assertIn("NIM stream died", details)
+                self.assertNotIn("Aborted:", details)
+
     def test_clients_filter_keepalive_responses(self) -> None:
-        """Clients drop keep-alive responses before writing to output buffers."""
+        """S2S/ASD clients drop keep-alive; the LipSync client passes them through."""
         s2s_keepalive = SpeechToSpeechResponse()
         s2s_keepalive.keepalive.SetInParent()
         s2s_audio = SpeechToSpeechResponse(audio_data=b"audio")
@@ -145,12 +206,15 @@ class TestNimClients(unittest.TestCase):
         self.assertEqual(len(asd_buffered), 1)
         self.assertEqual(asd_buffered[0].active_speaker_detection_result.frame_id, 0)
 
+        # LipSync keepalives flow through so the controller can forward them
+        # to its own client while LipSync waits for input.
         lipsync_keepalive = LipsyncResponse()
         lipsync_keepalive.keepalive.SetInParent()
         lipsync_video = LipsyncResponse(video_file_data=b"video")
         lipsync_buffered = self._run_client(LipsyncClient, [lipsync_keepalive, lipsync_video])
-        self.assertEqual(len(lipsync_buffered), 1)
-        self.assertEqual(lipsync_buffered[0].video_file_data, b"video")
+        self.assertEqual(len(lipsync_buffered), 2)
+        self.assertTrue(lipsync_buffered[0].HasField("keepalive"))
+        self.assertEqual(lipsync_buffered[1].video_file_data, b"video")
 
 
 if __name__ == "__main__":

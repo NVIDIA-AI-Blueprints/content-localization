@@ -46,7 +46,7 @@ class TestMain:
 
     @patch("client.direct.app.VideoSinkSimulator")
     @patch("client.direct.app.VideoSourceSimulator")
-    @patch("client.source_simulators.video.simulated_video_chunk_generator_raw")
+    @patch("common.source_sink.grpc.video.simulated_video_chunk_generator_raw")
     @patch("client.direct.app.AudioSinkSimulator")
     @patch("client.direct.app.AudioSourceSimulator")
     @patch("client.direct.app.simulated_audio_chunk_generator")
@@ -68,6 +68,7 @@ class TestMain:
         mock_video_gen,
         mock_video_source_sim,
         mock_video_sink_sim,
+        tmp_path,
     ):
         """Test main function with successful execution."""
         # Mock diarization so bypass_asd stays False and ASD runs
@@ -131,14 +132,17 @@ class TestMain:
         mock_audio_gen.return_value = [b"audio_chunk"]
         mock_video_gen.return_value = [b"video_chunk"]
 
-        # Run main
+        # Run main. The diarization file must exist because
+        # DirectPipelineConfig.validate_io checks it at startup.
         import sys
         from unittest.mock import patch as patch_sys_argv
 
+        diarization_file = tmp_path / "diar.json"
+        diarization_file.write_text("[]")
         with patch_sys_argv.object(
             sys,
             "argv",
-            ["client.py", "--diarization-file", "diar.json"],
+            ["client.py", "--diarization-file", str(diarization_file)],
         ):
             main()
 
@@ -274,7 +278,7 @@ class TestMain:
 
     @patch("client.direct.app.VideoSinkSimulator")
     @patch("client.direct.app.VideoSourceSimulator")
-    @patch("client.source_simulators.video.simulated_video_chunk_generator_raw")
+    @patch("common.source_sink.grpc.video.simulated_video_chunk_generator_raw")
     @patch("client.direct.app.AudioSinkSimulator")
     @patch("client.direct.app.AudioSourceSimulator")
     @patch("client.direct.app.simulated_audio_chunk_generator")
@@ -296,6 +300,7 @@ class TestMain:
         mock_video_gen,
         mock_video_source_sim,
         mock_video_sink_sim,
+        tmp_path,
     ):
         """Test main function with custom command line arguments."""
         # Mock diarization so bypass_asd stays False and ASD runs
@@ -352,10 +357,16 @@ class TestMain:
         mock_audio_gen.return_value = [b"audio_chunk"]
         mock_video_gen.return_value = [b"video_chunk"]
 
-        # Run main with custom arguments
+        # Run main with custom arguments. Input and diarization files must
+        # exist because DirectPipelineConfig.validate_io checks them.
         import sys
         from unittest.mock import patch as patch_sys_argv
 
+        input_audio = tmp_path / "custom_input.wav"
+        input_audio.write_bytes(b"RIFF")
+        output_audio = tmp_path / "custom_output.wav"
+        diarization_file = tmp_path / "diar.json"
+        diarization_file.write_text("[]")
         with patch_sys_argv.object(
             sys,
             "argv",
@@ -364,13 +375,13 @@ class TestMain:
                 "--s2s-server",
                 "custom-server:50050",
                 "--input-audio",
-                "custom_input.wav",
+                str(input_audio),
                 "--output-audio",
-                "custom_output.wav",
+                str(output_audio),
                 "--chunk-size-audio-secs",
                 "0.5",
                 "--diarization-file",
-                "diar.json",
+                str(diarization_file),
             ],
         ):
             main()
@@ -381,8 +392,8 @@ class TestMain:
                 f"Expected AudioSourceSimulator to be called 2 times, got {mock_source_sim.call_count}"
             )
         if mock_source_sim.call_args_list != [
-            call(file_path="custom_input.wav"),
-            call(file_path="custom_input.wav"),
+            call(file_path=str(input_audio)),
+            call(file_path=str(input_audio)),
         ]:
             raise AssertionError(
                 "Expected AudioSourceSimulator to be called twice with custom input path"
@@ -394,7 +405,7 @@ class TestMain:
             sample_width=mock_source_instance.sample_width,
             n_channels=mock_source_instance.n_channels,
             n_frames=mock_source_instance.n_frames,
-            file_path="custom_output.wav",
+            file_path=str(output_audio),
             chunk_duration_secs=0.5,
             audio_format="wav",
         )
@@ -409,7 +420,7 @@ class TestMain:
 
     @patch("client.direct.app.VideoSinkSimulator")
     @patch("client.direct.app.VideoSourceSimulator")
-    @patch("client.source_simulators.video.simulated_video_chunk_generator_raw")
+    @patch("common.source_sink.grpc.video.simulated_video_chunk_generator_raw")
     @patch("client.direct.app.AudioSinkSimulator")
     @patch("client.direct.app.AudioSourceSimulator")
     @patch("client.direct.app.simulated_audio_chunk_generator")
@@ -417,7 +428,7 @@ class TestMain:
     @patch("client.direct.app.ActiveSpeakerDetectionClient")
     @patch("client.direct.app.SpeechToSpeechClient")
     @patch("client.direct.app.check_service_health")
-    def test_main_with_video_and_speaker_info_outputs(
+    def test_main_with_video_output(
         self,
         mock_health,
         mock_s2s_client,
@@ -430,7 +441,7 @@ class TestMain:
         mock_video_source_sim,
         mock_video_sink_sim,
     ):
-        """Test main function with video and speaker info outputs."""
+        """Test main function with a bare output video filename."""
         # Mock health check
         mock_health.return_value = True
 
@@ -480,106 +491,23 @@ class TestMain:
         mock_audio_gen.return_value = [b"audio_chunk"]
         mock_video_gen.return_value = [b"video_chunk"]
 
-        # Run main with video and speaker info outputs
+        # Run main with a bare output filename: validate_io must accept a
+        # path with no directory component.
         import sys
         from unittest.mock import patch as patch_sys_argv
 
         with patch_sys_argv.object(
             sys,
             "argv",
-            ["client.py", "--output-mp4", "output.mp4", "--output-speaker-info", "output.csv"],
+            ["client.py", "--output-mp4", "output.mp4"],
         ):
             main()
 
-        # Check that the function completed without errors
-        # Note: Current implementation doesn't write audio directly, only processes LipSync
-        # So we don't expect the write method to be called
-        # mock_sink_instance.write.assert_called_once_with(b"audio1")
-
-    @patch("client.direct.app.VideoSinkSimulator")
-    @patch("client.direct.app.VideoSourceSimulator")
-    @patch("client.source_simulators.video.simulated_video_chunk_generator_raw")
-    @patch("client.direct.app.AudioSinkSimulator")
-    @patch("client.direct.app.AudioSourceSimulator")
-    @patch("client.direct.app.simulated_audio_chunk_generator")
-    @patch("client.direct.app.LipsyncClient")
-    @patch("client.direct.app.ActiveSpeakerDetectionClient")
-    @patch("client.direct.app.SpeechToSpeechClient")
-    @patch("client.direct.app.check_service_health")
-    def test_main_with_latency_analysis(
-        self,
-        mock_health,
-        mock_s2s_client,
-        mock_asd_client,
-        mock_lipsync_client,
-        mock_audio_gen,
-        mock_source_sim,
-        mock_sink_sim,
-        mock_video_gen,
-        mock_video_source_sim,
-        mock_video_sink_sim,
-    ):
-        """Test main function with latency analysis enabled."""
-        # Mock health check
-        mock_health.return_value = True
-
-        # Mock AudioSourceSimulator
-        mock_source_instance = MagicMock()
-        mock_source_instance.frame_rate = 16000
-        mock_source_instance.sample_width = 2
-        mock_source_instance.n_channels = 1
-        mock_source_instance.n_frames = 44100
-        mock_source_instance.header = b"mock_header"
-        mock_source_instance.ledger = {0: 1000.0, 1: 1001.0}
-        mock_source_sim.return_value = mock_source_instance
-
-        # Mock AudioSinkSimulator
-        mock_sink_instance = MagicMock()
-        mock_sink_instance.ledger = {0: 1000.5, 1: 1001.5}
-        mock_sink_sim.return_value = mock_sink_instance
-
-        # Mock VideoSourceSimulator
-        mock_video_source_instance = MagicMock()
-        mock_video_source_sim.return_value = mock_video_source_instance
-
-        # Mock VideoSinkSimulator
-        mock_video_sink_instance = MagicMock()
-        mock_video_sink_sim.return_value = mock_video_sink_instance
-
-        # Mock S2S responses
-        mock_s2s_response = MagicMock()
-        mock_s2s_response.audio_data = b"audio1"
-        mock_s2s_response.audio_format = "mp3"
-        mock_s2s_response.HasField.return_value = False
-        _configure_mock_client(mock_s2s_client, [mock_s2s_response], consume_request_iterator=True)
-
-        # Mock ASD responses
-        mock_asd_response = MagicMock()
-        mock_asd_response.active_speaker_detection_result.speaker_data = []
-        mock_asd_response.confidences = []
-        _configure_mock_client(mock_asd_client, [mock_asd_response])
-
-        # Mock LipSync responses
-        mock_lipsync_response = MagicMock()
-        mock_lipsync_response.audio_file_data = b"audio1"
-        mock_lipsync_response.video_file_data = b"video1"
-        _configure_mock_client(mock_lipsync_client, [mock_lipsync_response])
-
-        # Mock generators
-        mock_audio_gen.return_value = [b"audio_chunk"]
-        mock_video_gen.return_value = [b"video_chunk"]
-
-        # Run main with latency analysis
-        import sys
-        from unittest.mock import patch as patch_sys_argv
-
-        with patch_sys_argv.object(sys, "argv", ["client.py", "--latency-plot", "./latency.png"]):
-            main()
-
-        # Check that the function completed without errors
-        # Note: Current implementation doesn't write audio directly, only processes LipSync
-        # So we don't expect the write method to be called
-        # mock_sink_instance.write.assert_called_once_with(b"audio1")
+        # The bare filename reaches the video sink unchanged.
+        mock_video_sink_sim.assert_called_once_with(
+            file_path="output.mp4",
+            chunk_size=1024 * 1024,
+        )
 
 
 if __name__ == "__main__":

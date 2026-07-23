@@ -30,7 +30,7 @@ This will use the default settings:
 python client/s2s/app.py \
     --s2s-server localhost:50050 \
     --input-audio assets/sample_audio.wav \
-    --output-audio outputs/translated_audio.wav \
+    --output-audio outputs/translated_audio.mp3 \
     --chunk-size-audio-secs 0.5
 ```
 
@@ -40,17 +40,6 @@ python client/s2s/app.py \
 python client/s2s/app.py \
     --no-camb-ai-optimization \
     --camb-chosen-dictionaries 1,5,12
-```
-
-### Latency Analysis
-
-The S2S client includes built-in latency analysis capabilities:
-
-```bash
-python client/s2s/latency_analysis.py \
-    --input-audio assets/sample_audio.wav \
-    --s2s-server localhost:50050 \
-    --output-plot latency_analysis.png
 ```
 
 ## Command Line Arguments
@@ -99,7 +88,7 @@ docker compose --profile third-party-s2s --env-file configs/elevenlabs.env --env
 # 2. Run the S2S client
 python client/s2s/app.py \
     --input-audio assets/sample_audio.wav \
-    --output-audio outputs/translated_audio.wav \
+    --output-audio outputs/translated_audio.mp3 \
     --source-language en --target-language de
 ```
 
@@ -119,12 +108,4 @@ python client/s2s/app.py \
     --camb-ai-optimization
 ```
 
-### Latency Analysis
-
-```bash
-python client/s2s/latency_analysis.py \
-    --input-audio assets/sample_audio.wav \
-    --output-plot s2s_latency_analysis.png
-```
-
-The S2S client provides a robust and efficient interface for audio translation, with built-in performance monitoring and comprehensive error handling.
+The S2S client provides a robust and efficient interface for audio translation, with comprehensive error handling.

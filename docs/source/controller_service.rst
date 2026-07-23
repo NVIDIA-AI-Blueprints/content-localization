@@ -16,10 +16,11 @@ regions, and lip-synced video.
 Overview
 ========
 
-The service entrypoint lives in ``controller_service.service`` and exposes the
+The service is implemented in ``controller_service.service`` and exposes the
 ``StreamContentLocalization`` gRPC endpoint defined in the controller
-protobuf. The default deployment starts a ``ControllerService`` instance and a
-matching ``ControllerServiceServicer`` that bridges gRPC requests into the
+protobuf. The CLI entrypoint in ``controller_service.entrypoint`` starts a
+``ControllerService`` instance and a matching ``ControllerServiceServicer``
+(from ``controller_service.servicer``) that bridges gRPC requests into the
 business logic.
 
 The ``ContentLocalizationDeserializer`` distributes incoming request packets
@@ -35,6 +36,14 @@ buffers concurrently.
 Supporting Modules
 ==================
 
+- ``controller_service.servicer``: gRPC servicer that receives the client
+  request stream, delegates to ``ControllerService.infer``, and maps
+  pipeline exceptions to specific gRPC status codes.
+- ``controller_service.pipeline``: Thread-orchestration functions that launch
+  the S2S, ASD, and LipSync client threads, drain unused buffer queues,
+  stream responses, and clean up pipeline threads.
+- ``controller_service.config``: Per-request dataclasses bundling the
+  effective pipeline configuration and downstream service handles.
 - ``controller_service.stream_adapters``: Adapts client request streams into
   iterators suitable for downstream service request pipelines. Merges video,
   audio, and optional diarization streams into ASD requests, and video, audio,
@@ -66,7 +75,7 @@ audio from the ``translated_audio_buffer`` is routed directly to LipSync
 via the ``translated_audio_to_lipsync_audio`` stream adapter. This
 adapter calls ``to_lipsync_translated_audio`` from the conversions module
 to convert each ``ContentLocalizationRequest.translated_audio_data``
-payload into a ``LipsyncInputData`` message.
+payload into a ready-to-send ``LipsyncRequest`` message.
 
 Clients enable this mode by passing ``--translated-audio`` with a path
 to a pre-translated audio file (WAV or MP3). The Controller and Direct

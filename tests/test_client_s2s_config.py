@@ -15,13 +15,14 @@ from client.s2s.config import S2SConfig
 @pytest.mark.unit
 class TestS2SConfig(unittest.TestCase):
     def setUp(self):
-        self.args = MagicMock(spec=[])
+        self.args = MagicMock()
         self.args.s2s_server = "localhost:50050"
         self.args.input_audio = "audio.wav"
         self.args.output_audio = "output.mp3"
         self.args.chunk_size_audio_secs = 1.0
         self.args.source_language = "en"
         self.args.target_language = "es"
+        self.args.voice_name = None
         self.args.elevenlabs_num_speakers = 0
         self.args.elevenlabs_drop_background_audio = False
         self.args.elevenlabs_use_profanity_filter = False
@@ -40,7 +41,6 @@ class TestS2SConfig(unittest.TestCase):
         self.assertEqual(config.chunk_size_audio_secs, 1.0)
         self.assertEqual(config.source_language, "en")
         self.assertEqual(config.target_language, "es")
-        # voice_name is not set via CLI args, so it defaults to None
         self.assertIsNone(config.voice_name)
         self.assertEqual(config.elevenlabs_num_speakers, 0)
         self.assertFalse(config.elevenlabs_drop_background_audio)

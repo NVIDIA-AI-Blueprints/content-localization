@@ -18,10 +18,11 @@ Both are composed into the S2S helpers automatically.
 import argparse
 
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
-from s2s.camb_args import add_camb_config_args_to_parser
-from s2s.camb_args import apply_camb_args_to_config
-from s2s.elevenlabs_args import add_elevenlabs_config_args_to_parser
-from s2s.elevenlabs_args import apply_elevenlabs_args_to_config
+
+from client.s2s.camb_args import add_camb_config_args_to_parser
+from client.s2s.camb_args import apply_camb_args_to_config
+from client.s2s.elevenlabs_args import add_elevenlabs_config_args_to_parser
+from client.s2s.elevenlabs_args import apply_elevenlabs_args_to_config
 
 KB = 1024
 
@@ -58,9 +59,14 @@ def add_s2s_config_args_to_parser(
         "--target-language",
         type=str,
         default="de",
-        help="Target language for speech-to-speech translation (default: de). "
-        "Note: when using the RIVA Magpie Multilingual TTS model, "
-        "only en-US is supported as an output language.",
+        help="Target language for speech-to-speech translation (default: de)",
+    )
+    parser.add_argument(
+        "--voice-name",
+        type=str,
+        default=None,
+        help="Voice name for TTS (optional, service will use default if not provided). "
+        "For zero-shot TTS, the service automatically extracts voice from input audio.",
     )
     add_elevenlabs_config_args_to_parser(parser)
     add_camb_config_args_to_parser(parser)
@@ -75,7 +81,7 @@ def s2s_config_from_args(args: argparse.Namespace) -> SpeechToSpeechConfig:
 
     Args:
         args (argparse.Namespace): Parsed argument namespace with
-            ``source_language``, ``target_language``,
+            ``source_language``, ``target_language``, ``voice_name``,
             and ``elevenlabs_*`` attributes.
 
     Returns:
@@ -85,6 +91,7 @@ def s2s_config_from_args(args: argparse.Namespace) -> SpeechToSpeechConfig:
         >>> args = argparse.Namespace(
         ...     source_language="en",
         ...     target_language="de",
+        ...     voice_name=None,
         ...     elevenlabs_num_speakers=0,
         ...     elevenlabs_drop_background_audio=False,
         ...     elevenlabs_use_profanity_filter=False,
@@ -102,11 +109,8 @@ def s2s_config_from_args(args: argparse.Namespace) -> SpeechToSpeechConfig:
         config.source_language = args.source_language
     if args.target_language:
         config.target_language = args.target_language
-    # voice_name is not exposed as a CLI argument; populate from the
-    # namespace only when set programmatically by a caller.
-    voice_name = getattr(args, "voice_name", None)
-    if voice_name:
-        config.voice_name = voice_name
+    if args.voice_name:
+        config.voice_name = args.voice_name
     apply_elevenlabs_args_to_config(args, config)
     apply_camb_args_to_config(args, config)
     return config
@@ -148,6 +152,14 @@ def argsfactory() -> argparse.ArgumentParser:
         type=str,
         default="outputs/latency.png",
         help="Path to the latency plot (default: outputs/latency.png)",
+    )
+    parser.add_argument(
+        "--latency-json",
+        type=str,
+        default="outputs/s2s_latency.json",
+        help=(
+            "Path to a machine-readable latency summary JSON (default: outputs/s2s_latency.json)."
+        ),
     )
     add_s2s_config_args_to_parser(parser)
     return parser

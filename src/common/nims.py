@@ -3,7 +3,6 @@
 
 """NIMs and tools for interacting with NIMs."""
 
-import traceback
 from collections.abc import Iterator
 from typing import Any
 
@@ -24,14 +23,14 @@ from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechRequest
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechResponse
 from nvidia.ai4m.s2s.v1.s2s_pb2_grpc import SpeechToSpeechStub
 
-from base_utils import logger
+from common.base_utils import logger
 from common.buffers import Buffer
 from common.clients import Client
-from common.service import GRPCInferenceServer
+from common.service import GRPCInferenceHandle
 
 
-class SpeechToSpeechServer(GRPCInferenceServer):
-    """Speech to Speech NIM Server."""
+class SpeechToSpeechHandle(GRPCInferenceHandle):
+    """Speech to Speech NIM service handle."""
 
     def __init__(
         self,
@@ -40,11 +39,11 @@ class SpeechToSpeechServer(GRPCInferenceServer):
         health_check_service: str = "",
         channel_credentials: grpc.ChannelCredentials | None = None,
     ) -> None:
-        """Initialize the SpeechToSpeechServer.
+        """Initialize the SpeechToSpeechHandle.
 
         Args:
-            host (str): The host to listen on.
-            port (int): The port to listen on.
+            host (str): The host to connect to.
+            port (int): The port to connect to.
             health_check_service (str): The health check service to use.
         """
         super().__init__(
@@ -58,7 +57,7 @@ class SpeechToSpeechServer(GRPCInferenceServer):
     def get_response_iterator(
         self, request_iterator: Iterator[SpeechToSpeechRequest]
     ) -> Iterator[SpeechToSpeechResponse]:
-        """Get a response iterator from the SpeechToSpeechServer.
+        """Get a response iterator from the Speech to Speech service.
 
         Args:
             request_iterator (Iterator[Any]): The request iterator.
@@ -67,8 +66,8 @@ class SpeechToSpeechServer(GRPCInferenceServer):
         return self.stub.StreamSpeechToSpeech(request_iterator)
 
 
-class ActiveSpeakerDetectionServer(GRPCInferenceServer):
-    """Active Speaker Detection NIM Server."""
+class ActiveSpeakerDetectionHandle(GRPCInferenceHandle):
+    """Active Speaker Detection NIM service handle."""
 
     def __init__(
         self,
@@ -77,11 +76,11 @@ class ActiveSpeakerDetectionServer(GRPCInferenceServer):
         health_check_service: str = "",
         channel_credentials: grpc.ChannelCredentials | None = None,
     ) -> None:
-        """Initialize the SpeakerDetectionServer.
+        """Initialize the ActiveSpeakerDetectionHandle.
 
         Args:
-            host (str): The host to listen on.
-            port (int): The port to listen on.
+            host (str): The host to connect to.
+            port (int): The port to connect to.
             health_check_service (str): The health check service to use.
         """
         super().__init__(
@@ -95,7 +94,7 @@ class ActiveSpeakerDetectionServer(GRPCInferenceServer):
     def get_response_iterator(
         self, request_iterator: Iterator[DetectActiveSpeakerRequest]
     ) -> Iterator[DetectActiveSpeakerResponse]:
-        """Get a response iterator from the ActiveSpeakerDetectionServer.
+        """Get a response iterator from the Active Speaker Detection service.
 
         Args:
             request_iterator (Iterator[Any]): The request iterator.
@@ -103,8 +102,8 @@ class ActiveSpeakerDetectionServer(GRPCInferenceServer):
         return self.stub.DetectActiveSpeaker(request_iterator)
 
 
-class LipsyncServer(GRPCInferenceServer):
-    """Lipsync NIM Server."""
+class LipsyncHandle(GRPCInferenceHandle):
+    """Lipsync NIM service handle."""
 
     def __init__(
         self,
@@ -113,11 +112,11 @@ class LipsyncServer(GRPCInferenceServer):
         health_check_service: str = "",
         channel_credentials: grpc.ChannelCredentials | None = None,
     ) -> None:
-        """Initialize the LipsyncServer.
+        """Initialize the LipsyncHandle.
 
         Args:
-            host (str): The host to listen on.
-            port (int): The port to listen on.
+            host (str): The host to connect to.
+            port (int): The port to connect to.
             health_check_service (str): The health check service to use.
         """
         super().__init__(
@@ -131,7 +130,7 @@ class LipsyncServer(GRPCInferenceServer):
     def get_response_iterator(
         self, request_iterator: Iterator[LipsyncRequest]
     ) -> Iterator[LipsyncResponse]:
-        """Get a response iterator from the LipsyncServer.
+        """Get a response iterator from the LipSync service.
 
         Args:
             request_iterator (Iterator[Any]): The request iterator.
@@ -148,23 +147,19 @@ class SpeechToSpeechClient(Client[SpeechToSpeechRequest, SpeechToSpeechResponse]
         output_buffer: Buffer[SpeechToSpeechResponse],
         context: grpc.ServicerContext,
         request_id: str,
-        *args: tuple[object, ...],
         **kwargs: Any,
     ) -> None:
         logger.debug(f"Starting SpeechToSpeech client for request_id={request_id}")
-        if self.server.stub is None:
-            self.server.create_server()
-        response_iterator = self.server.get_response_iterator(request_iterator=request_iterator)
-        try:
-            for response in response_iterator:
-                if response.HasField("keepalive"):
-                    logger.debug("SpeechToSpeech client: skipping keep-alive response")
-                    continue
-                output_buffer.put(response)
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error(f"Error in SpeechToSpeech client: {e}\n{tb}")
-            context.abort(grpc.StatusCode.INTERNAL, f"{type(e).__name__}: {e}\n{tb}")
+        if self.handle.stub is None:
+            self.handle.connect()
+        response_iterator = self.handle.get_response_iterator(request_iterator=request_iterator)
+        # Errors propagate to Client.__call__, which owns logging and the single
+        # context abort.
+        for response in response_iterator:
+            if response.HasField("keepalive"):
+                logger.debug("SpeechToSpeech client: skipping keep-alive response")
+                continue
+            output_buffer.put(response)
 
 
 class ActiveSpeakerDetectionClient(Client[DetectActiveSpeakerRequest, DetectActiveSpeakerResponse]):
@@ -176,16 +171,18 @@ class ActiveSpeakerDetectionClient(Client[DetectActiveSpeakerRequest, DetectActi
         output_buffer: Buffer[DetectActiveSpeakerResponse],
         context: grpc.ServicerContext,
         request_id: str,
-        *args: tuple[object, ...],
         **kwargs: Any,
     ) -> None:
         logger.debug(f"Starting ActiveSpeakerDetection client for request_id={request_id}")
-        if self.server.stub is None:
-            self.server.create_server()
-        response_iterator = self.server.get_response_iterator(request_iterator=request_iterator)
+        if self.handle.stub is None:
+            self.handle.connect()
+        response_iterator = self.handle.get_response_iterator(request_iterator=request_iterator)
         result_count = 0
         keepalive_count = 0
         config_count = 0
+        # Errors propagate to Client.__call__, which owns logging and the single
+        # context abort; the finally logs the count summary even when the stream
+        # ends early.
         try:
             for response in response_iterator:
                 if response.HasField("keepalive"):
@@ -196,18 +193,20 @@ class ActiveSpeakerDetectionClient(Client[DetectActiveSpeakerRequest, DetectActi
                     continue
                 result_count += 1
                 output_buffer.put(response)
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error(f"Error in ActiveSpeakerDetection client: {e}\n{tb}")
-            context.abort(grpc.StatusCode.INTERNAL, f"{type(e).__name__}: {e}\n{tb}")
-        logger.info(
-            f"ASD client finished: results={result_count},"
-            f" keepalives={keepalive_count}, configs={config_count}"
-        )
+        finally:
+            logger.info(
+                f"ASD client finished: results={result_count},"
+                f" keepalives={keepalive_count}, configs={config_count}"
+            )
 
 
 class LipsyncClient(Client[LipsyncRequest, LipsyncResponse]):
-    """Client that streams non-keepalive LipSync responses into an output buffer."""
+    """Client that streams LipSync responses into an output buffer.
+
+    Keepalive responses are passed through so downstream consumers can
+    forward them and keep their own streams alive while LipSync waits for
+    input (for example during a long-running dubbing job).
+    """
 
     def _impl(
         self,
@@ -215,20 +214,13 @@ class LipsyncClient(Client[LipsyncRequest, LipsyncResponse]):
         output_buffer: Buffer[LipsyncResponse],
         context: grpc.ServicerContext,
         request_id: str,
-        *args: tuple[object, ...],
         **kwargs: Any,
     ) -> None:
         logger.debug(f"Starting LipSync client for request_id={request_id}")
-        if self.server.stub is None:
-            self.server.create_server()
-        response_iterator = self.server.get_response_iterator(request_iterator=request_iterator)
-        try:
-            for response in response_iterator:
-                if response.HasField("keepalive"):
-                    logger.debug("LipSync client: skipping keep-alive response")
-                    continue
-                output_buffer.put(response)
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error(f"Error in Lipsync client: {e}\n{tb}")
-            context.abort(grpc.StatusCode.INTERNAL, f"{type(e).__name__}: {e}\n{tb}")
+        if self.handle.stub is None:
+            self.handle.connect()
+        response_iterator = self.handle.get_response_iterator(request_iterator=request_iterator)
+        # Errors propagate to Client.__call__, which owns logging and the single
+        # context abort.
+        for response in response_iterator:
+            output_buffer.put(response)

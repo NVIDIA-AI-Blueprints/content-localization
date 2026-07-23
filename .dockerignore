@@ -1,3 +1,7 @@
+# NOTE: assets/ is NOT excluded here because client/demos/Dockerfile COPYes
+# it into the demo-app image. The controller and s2s builds exclude it via
+# their per-Dockerfile ignore files (dockerfiles/*.dockerfile.dockerignore,
+# honored by BuildKit).
 .*
 **/__pycache__
 *.pyc
@@ -12,7 +16,8 @@ experiments*
 logs
 node_modules
 outputs
-volumes/profiler/*.*protos/generated
+volumes/profiler/*.*
+protos/generated
 security
 tests
 uml

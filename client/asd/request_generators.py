@@ -4,7 +4,6 @@
 """ASD request stream generators for the standalone ASD client."""
 
 from collections.abc import Iterator
-from itertools import zip_longest
 
 from nvidia.ai4m.activespeakerdetection.v1.activespeakerdetection_pb2 import (
     ActiveSpeakerDetectionConfig,
@@ -17,8 +16,11 @@ from nvidia.ai4m.activespeakerdetection.v1.activespeakerdetection_pb2 import (
     DetectActiveSpeakerRequest,
 )
 
-from client.source_simulators.audio import AudioSourceSimulator
-from client.source_simulators.video import VideoSourceSimulator
+from common.base_utils import logger
+from common.feeder_stream import FeederSource
+from common.feeder_stream import FeederStream
+from common.source_sink.grpc.audio import AudioSourceSimulator
+from common.source_sink.grpc.video import VideoSourceSimulator
 
 
 def asd_request_generator(
@@ -31,8 +33,11 @@ def asd_request_generator(
 ) -> Iterator[DetectActiveSpeakerRequest]:
     """Generate a stream of DetectActiveSpeakerRequest messages for the ASD service.
 
-    Sends config first, then interleaves video and audio data chunks.
-    Optionally includes diarization info with the first data message.
+    Sends config first, then concurrently merges video, audio, and
+    optional diarization into a single request stream via
+    :class:`~common.feeder_stream.FeederStream` (diarization is supplied as
+    an additional :class:`~common.feeder_stream.FeederSource`, so it is
+    interleaved with media chunks rather than pre-sent).
 
     Args:
         video_source (VideoSourceSimulator): Video source simulator for
@@ -61,38 +66,52 @@ def asd_request_generator(
     """
     # 1. Send config as the first message
     yield DetectActiveSpeakerRequest(config=asd_config)
-    print(f"ASD: sent config: {asd_config}")
+    logger.debug(f"ASD: sent config: {asd_config}")
 
-    # 2. Create iterators for video and audio data
+    # 2. Create iterators and merge via concurrent feeder threads
     video_iter = video_source.read(chunk_size=chunk_size_video_bytes)
     audio_iter = audio_source.read(chunk_duration_secs=chunk_size_audio_secs)
 
-    # 3. Send diarization info with the first data message if provided
-    diarization_sent = diarization_info is None  # True means "no need to send"
+    sources: list[FeederSource] = [
+        FeederSource(
+            name="video",
+            iterator=video_iter,
+            transform=lambda c: DetectActiveSpeakerRequest(
+                data=ActiveSpeakerDetectionData(video_data=c),
+            ),
+        ),
+        FeederSource(
+            name="audio",
+            iterator=audio_iter,
+            transform=lambda c: DetectActiveSpeakerRequest(
+                data=ActiveSpeakerDetectionData(audio_data=c),
+            ),
+        ),
+    ]
 
-    # 4. Interleave video and audio data
-    chunk_counters = {"video": 0, "audio": 0}
-    for video_chunk, audio_chunk in zip_longest(video_iter, audio_iter, fillvalue=None):
-        if video_chunk is not None:
-            chunk_counters["video"] += 1
-            data_kwargs = {"video_data": video_chunk}
-            # Attach diarization info to the first video data message
-            if not diarization_sent:
-                data_kwargs["diarization_info"] = diarization_info
-                diarization_sent = True
-            yield DetectActiveSpeakerRequest(data=ActiveSpeakerDetectionData(**data_kwargs))
-
-        if audio_chunk is not None:
-            chunk_counters["audio"] += 1
-            yield DetectActiveSpeakerRequest(
-                data=ActiveSpeakerDetectionData(audio_data=audio_chunk)
+    if diarization_info is not None:
+        sources.append(
+            FeederSource(
+                name="diarization",
+                iterator=iter([diarization_info]),
+                transform=lambda info: DetectActiveSpeakerRequest(
+                    data=ActiveSpeakerDetectionData(diarization_info=info),
+                ),
             )
+        )
 
-        total = chunk_counters["video"] + chunk_counters["audio"]
-        if total % 100 == 0:
-            print(f"ASD progress: video={chunk_counters['video']}, audio={chunk_counters['audio']}")
+    stream: FeederStream[DetectActiveSpeakerRequest] = FeederStream(sources=sources)
+    stream.start(request_id="asd-standalone")
+    try:
+        yield from stream
+    finally:
+        stream.stop()
 
-    print(
-        f"ASD data sending complete: video={chunk_counters['video']}, "
-        f"audio={chunk_counters['audio']}"
+    counts = stream.chunk_counts
+    logger.debug(
+        f"ASD data sending complete: "
+        f"video={counts.get('video', 0)}, "
+        f"audio={counts.get('audio', 0)}, "
+        f"diarization={counts.get('diarization', 0)}"
     )
+    stream.raise_on_error()

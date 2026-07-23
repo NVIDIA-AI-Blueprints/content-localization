@@ -8,8 +8,10 @@ import tempfile
 
 import pytest
 
-from client.source_simulators.video import VideoSinkSimulator
-from client.source_simulators.video import VideoSourceSimulator
+from common.source_sink.grpc.video import VideoSinkSimulator
+from common.source_sink.grpc.video import VideoSourceSimulator
+
+pytestmark = pytest.mark.unit
 
 
 class TestVideoSourceSimulator:
@@ -282,3 +284,94 @@ class TestVideoSinkSimulator:
 
             # Should have written some chunks
             assert simulator._chunk_count > 0
+
+
+class TestBaseFileSimulatorContextManager:
+    """Test cases for the context-manager protocol on file simulators."""
+
+    def test_source_context_manager_closes_file(self):
+        """Exiting the context closes the underlying file handle."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+            temp_file.write(b"fake video data")
+            temp_path = temp_file.name
+
+        try:
+            with VideoSourceSimulator(temp_path) as simulator:
+                assert simulator.is_open()
+                frames = list(simulator.frames(chunk_size=64))
+                assert len(frames) > 0
+            assert not simulator.is_open()
+        finally:
+            os.unlink(temp_path)
+
+    def test_sink_context_manager_closes_file(self):
+        """Exiting the context closes the sink and its written data persists."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "output.mp4")
+            test_data = b"fake video frame data"  # 21 bytes
+
+            with VideoSinkSimulator(output_path, chunk_size=21) as simulator:
+                assert simulator.is_open()
+                simulator.write(test_data)
+            assert not simulator.is_open()
+
+            with open(output_path, "rb") as f:
+                assert f.read() == test_data
+
+    def test_context_manager_closes_file_on_exception(self):
+        """The file handle is closed even when the context body raises."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "output.mp4")
+
+            with (
+                pytest.raises(RuntimeError, match="expected failure"),
+                VideoSinkSimulator(output_path) as simulator,
+            ):
+                raise RuntimeError("expected failure")
+            assert not simulator.is_open()
+
+    def test_close_is_idempotent(self):
+        """Calling close() after the context has exited is a no-op."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "output.mp4")
+
+            with VideoSinkSimulator(output_path) as simulator:
+                pass
+            simulator.close()
+            assert not simulator.is_open()
+
+    def test_sink_context_manager_flushes_partial_chunk(self):
+        """A trailing partial chunk is persisted when the context exits."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "output.mp4")
+
+            with VideoSinkSimulator(output_path, chunk_size=1024) as simulator:
+                simulator.write(b"partial")  # 7 bytes < chunk_size, stays buffered
+
+            with open(output_path, "rb") as f:
+                assert f.read() == b"partial"
+
+    def test_close_without_context_flushes_partial_chunk(self):
+        """A plain close() persists a buffered partial chunk."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "output.mp4")
+
+            simulator = VideoSinkSimulator(output_path, chunk_size=1024)
+            simulator.write(b"partial")
+            simulator.close()
+
+            with open(output_path, "rb") as f:
+                assert f.read() == b"partial"
+
+    def test_explicit_flush_then_close_writes_once(self):
+        """flush() followed by close() does not duplicate the buffered data."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "output.mp4")
+
+            simulator = VideoSinkSimulator(output_path, chunk_size=1024)
+            simulator.write(b"partial")
+            simulator.flush()
+            simulator.close()
+
+            with open(output_path, "rb") as f:
+                assert f.read() == b"partial"

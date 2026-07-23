@@ -15,20 +15,16 @@ Available Profiles
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 8 12 12 8 10 12 10 30
+   :widths: 24 8 8 10 12 10 34
 
    * - Profile
      - S2S
-     - ASR (RIVA)
-     - TTS (RIVA)
      - ASD
      - LipSync
      - Controller
      - Demo App
      - Description
    * - ``default``
-     - ✓
-     - ✓
      - ✓
      - ✓
      - ✓
@@ -41,66 +37,29 @@ Available Profiles
      - \-
      - \-
      - \-
-     - \-
-     - \-
      - S2S only with ElevenLabs/CambAI
-   * - ``riva``
-     - ✓
-     - ✓
-     - ✓
-     - \-
-     - \-
-     - \-
-     - \-
-     - S2S with RIVA ASR/TTS
    * - ``lipsync``
-     - \-
-     - \-
-     - \-
+     - ✓
      - \-
      - ✓
      - \-
      - \-
-     - LipSync only
+     - LipSync + S2S backend
    * - ``third-party-s2s-lipsync``
      - ✓
-     - \-
-     - \-
      - \-
      - ✓
      - \-
      - \-
      - S2S (ElevenLabs/CambAI) + LipSync
-   * - ``riva-lipsync``
-     - ✓
-     - ✓
-     - ✓
-     - \-
-     - ✓
-     - \-
-     - \-
-     - S2S (RIVA) + LipSync
    * - ``third-party-s2s-asd-lipsync``
      - ✓
-     - \-
-     - \-
      - ✓
      - ✓
      - \-
      - \-
      - Full pipeline with ElevenLabs/CambAI
-   * - ``riva-asd-lipsync``
-     - ✓
-     - ✓
-     - ✓
-     - ✓
-     - ✓
-     - \-
-     - \-
-     - Full pipeline with RIVA
    * - ``asd``
-     - \-
-     - \-
      - \-
      - ✓
      - \-
@@ -109,49 +68,25 @@ Available Profiles
      - Active Speaker Detection only
    * - ``controller-third-party-s2s``
      - ✓
-     - \-
-     - \-
      - ✓
      - ✓
      - ✓
      - \-
      - Orchestrated pipeline (ElevenLabs/CambAI)
-   * - ``controller-riva``
-     - ✓
-     - ✓
-     - ✓
+   * - ``asd-lipsync``
+     - \-
      - ✓
      - ✓
      - ✓
      - \-
-     - Orchestrated pipeline (RIVA)
-   * - ``demo-app``
-     - ✓
-     - \-
-     - \-
-     - \-
-     - \-
-     - \-
-     - ✓
-     - S2S + Web Demo App
+     - ASD + LipSync + Controller
    * - ``demo-app-third-party-s2s``
      - ✓
-     - \-
-     - \-
      - ✓
      - ✓
      - ✓
      - ✓
      - Full stack with Web Demo (ElevenLabs/CambAI)
-   * - ``demo-app-riva``
-     - ✓
-     - ✓
-     - ✓
-     - ✓
-     - ✓
-     - ✓
-     - ✓
-     - Full stack with Web Demo (RIVA)
 
 Usage Examples
 ~~~~~~~~~~~~~~
@@ -165,15 +100,6 @@ ElevenLabs/CambAI with full pipeline and demo app:
        --env-file .env \
        up --build
 
-RIVA with full pipeline and demo app:
-
-.. code-block:: bash
-
-   docker compose --profile demo-app-riva \
-       --env-file configs/riva.env \
-       --env-file .env \
-       up --build
-
 Controller orchestration with ElevenLabs/CambAI:
 
 .. code-block:: bash
@@ -183,61 +109,17 @@ Controller orchestration with ElevenLabs/CambAI:
        --env-file .env \
        up --build
 
-Controller orchestration with RIVA:
-
-.. code-block:: bash
-
-   docker compose --profile controller-riva \
-       --env-file configs/riva.env \
-       --env-file .env \
-       up --build
-
 Profile Selection Guide
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-* **For Development/Testing**: Use ``demo-app-third-party-s2s`` or ``demo-app-riva`` for the full stack with web interface
+* **For Development/Testing**: Use ``demo-app-third-party-s2s`` for the full stack with web interface
 * **For Production with ElevenLabs/CambAI**: Use ``controller-third-party-s2s`` for orchestrated processing
-* **For Production with RIVA**: Use ``controller-riva`` for orchestrated processing
-* **For Service Testing**: Use individual profiles like ``third-party-s2s``, ``riva``, ``lipsync``, or ``asd``
+* **For Service Testing**: Use individual profiles like ``third-party-s2s``, ``lipsync``, or ``asd``
 
 First-Time Deployment
 ---------------------
 
 For first-time deployment, use the deploy scripts to verify each service individually before deploying the full stack.
-
-Deploy ASR Service
-~~~~~~~~~~~~~~~~~~
-
-Deploy the RIVA ASR service with the Canary model:
-
-.. code-block:: bash
-
-   ./scripts/deploy_asr_canary.sh
-
-This will:
-
-* Download the Canary 1B ASR model to ``volumes/models/ast-canary/``
-* Start the RIVA ASR container on ports 8003 (HTTP) and 50053 (gRPC)
-* Verify the service is running correctly
-
-**Note:** Model download may take several minutes. Press Ctrl+C to stop once verified.
-
-Deploy TTS Service
-~~~~~~~~~~~~~~~~~~
-
-Deploy the zero-shot TTS service:
-
-.. code-block:: bash
-
-   ./scripts/deploy_tts_zeroshot.sh
-
-This downloads the Magpie Zero-Shot model to ``volumes/models/tts-zeroshot/`` and requires ``TTS_API_KEY`` environment variable.
-
-.. note::
-
-   When using the RIVA Magpie Multilingual TTS model
-   (``magpie-tts-multilingual``) instead of the zero-shot model,
-   only ``en-US`` is supported as an output (target) language.
 
 Deploy LipSync Service
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -246,12 +128,12 @@ Deploy the LipSync service:
 
 .. code-block:: bash
 
-   ./scripts/deploy_lipsync.sh
+   ./scripts/nims/deploy_lipsync.sh
 
 This will:
 
 * Download the LipSync models to ``volumes/models/lipsync/``
-* Start the LipSync container on ports 8000 (HTTP) and 8001 (gRPC)
+* Start the LipSync container on ports 8004 (HTTP) and 50054 (gRPC)
 * Requires ``LIPSYNC_API_KEY`` environment variable
 
 Deploy ASD Service
@@ -261,7 +143,7 @@ Deploy the Active Speaker Detection (ASD) NIM service:
 
 .. code-block:: bash
 
-   ./scripts/deploy_asd.sh
+   ./scripts/nims/deploy_asd.sh
 
 This will:
 
@@ -279,6 +161,41 @@ Deployment Notes
 
 Service Management
 ------------------
+
+Compose Service vs Container Names
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``docker compose`` subcommands that target a single service use the **service
+name** from ``docker-compose.yml``. This differs from the **container name** for
+the S2S service (service ``speech-to-speech`` runs in container ``s2s``). Use the
+service name with ``docker compose`` commands and the container name with plain
+``docker`` commands.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 30 35
+
+   * - Compose service
+     - Container name
+     - gRPC port
+   * - ``speech-to-speech``
+     - ``s2s``
+     - ``50050``
+   * - ``asd``
+     - ``asd``
+     - ``50055``
+   * - ``lipsync``
+     - ``lipsync``
+     - ``50054``
+   * - ``controller``
+     - ``controller``
+     - ``50056``
+   * - ``demo-app``
+     - ``demo-app``
+     - HTTP ``3000``
+
+For example, restart S2S with ``docker compose restart speech-to-speech`` (service
+name), but tail its container logs with ``docker logs s2s`` (container name).
 
 Starting Services
 ~~~~~~~~~~~~~~~~~
@@ -314,7 +231,7 @@ Real-Time Log Viewing
    docker compose logs -f
 
    # View logs from specific service
-   docker compose logs -f s2s
+   docker compose logs -f speech-to-speech
    docker compose logs -f controller
    docker compose logs -f lipsync
 
@@ -329,17 +246,15 @@ Use the log copy script to save logs to local files:
 .. code-block:: bash
 
    # Copy all service logs
-   ./scripts/copy_docker_logs.sh
+   ./scripts/misc/copy_docker_logs.sh
 
    # Copy specific service logs
-   ./scripts/copy_docker_logs.sh s2s
-   ./scripts/copy_docker_logs.sh controller
+   ./scripts/misc/copy_docker_logs.sh s2s
+   ./scripts/misc/copy_docker_logs.sh controller
 
 This creates log files in ``./logs/``:
 
 * ``./logs/s2s.log`` - Speech-to-Speech service logs
-* ``./logs/ast.log`` - ASR (RIVA) service logs
-* ``./logs/tts.log`` - TTS (RIVA) service logs
 * ``./logs/lipsync.log`` - LipSync service logs
 * ``./logs/asd.log`` - Active Speaker Detection logs
 * ``./logs/controller.log`` - Controller orchestration logs
@@ -351,4 +266,3 @@ Benefits of Copying Logs
 * Easy to share with team members for debugging
 * Can be archived or uploaded to issue trackers
 * Includes line counts and helpful status messages
-

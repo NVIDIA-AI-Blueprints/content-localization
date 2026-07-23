@@ -14,6 +14,8 @@ from ai4m_base_utils.config import AI4M_DEFAULT_SERVICE_GRPC_PORT
 from ai4m_base_utils.config import AI4M_DEFAULT_SERVICE_GRPC_URI
 from ai4m_base_utils.config import AI4M_MAX_INPUT_FILE_SIZE_MB
 
+pytestmark = pytest.mark.unit
+
 # NOTE: This test imports directly from the vendored module because it tests
 # config constants not re-exported via base_utils, and uses importlib.reload.
 

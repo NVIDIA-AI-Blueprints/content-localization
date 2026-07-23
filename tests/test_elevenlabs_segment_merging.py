@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from client.asd.diarization import load_diarization_info
+from client.common.diarization import load_diarization_info
 
 pytestmark = pytest.mark.unit
 
@@ -69,7 +69,7 @@ def test_consecutive_same_speaker_words_are_merged(tmp_path: Path) -> None:
 
     info = load_diarization_info(
         diarization_file=str(diarization_path),
-        diarization_format="elevenlabs",
+        diarization_format="elevenlabs-scribe",
     )
 
     assert info is not None
@@ -121,7 +121,7 @@ def test_speaker_change_creates_new_segment(tmp_path: Path) -> None:
 
     info = load_diarization_info(
         diarization_file=str(diarization_path),
-        diarization_format="elevenlabs",
+        diarization_format="elevenlabs-scribe",
     )
 
     assert info is not None
@@ -175,7 +175,7 @@ def test_alternating_speakers_no_merging(tmp_path: Path) -> None:
 
     info = load_diarization_info(
         diarization_file=str(diarization_path),
-        diarization_format="elevenlabs",
+        diarization_format="elevenlabs-scribe",
     )
 
     assert info is not None
@@ -186,3 +186,99 @@ def test_alternating_speakers_no_merging(tmp_path: Path) -> None:
     assert info.segments[1].word == "b"
     assert info.segments[2].speaker_id == 0
     assert info.segments[2].word == "c"
+
+
+def test_combine_disabled_keeps_one_segment_per_word(tmp_path: Path) -> None:
+    """combine_chunks_per_speaker=False keeps consecutive same-speaker words split."""
+    diarization_path = tmp_path / "el_no_merge.json"
+    diarization_path.write_text(
+        json.dumps(
+            {
+                "language_code": "eng",
+                "text": "hello beautiful world",
+                "words": [
+                    {
+                        "text": "hello",
+                        "start": 0.5,
+                        "end": 0.8,
+                        "type": "word",
+                        "speaker_id": "speaker_0",
+                    },
+                    {
+                        "text": " ",
+                        "start": 0.8,
+                        "end": 0.85,
+                        "type": "spacing",
+                        "speaker_id": "speaker_0",
+                    },
+                    {
+                        "text": "beautiful",
+                        "start": 0.9,
+                        "end": 1.2,
+                        "type": "word",
+                        "speaker_id": "speaker_0",
+                    },
+                    {
+                        "text": "world",
+                        "start": 1.3,
+                        "end": 1.6,
+                        "type": "word",
+                        "speaker_id": "speaker_0",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    info = load_diarization_info(
+        diarization_file=str(diarization_path),
+        diarization_format="elevenlabs-scribe",
+        combine_chunks_per_speaker=False,
+    )
+
+    assert info is not None
+    # Spacing is still filtered, but the three words stay as separate segments.
+    assert len(info.segments) == 3
+    assert [seg.word for seg in info.segments] == ["hello", "beautiful", "world"]
+    assert [seg.speaker_id for seg in info.segments] == [0, 0, 0]
+    assert info.segments[0].start_time == 500
+    assert info.segments[0].end_time == 800
+    # Each word keeps its own language_code.
+    assert all(seg.language_code == "eng" for seg in info.segments)
+
+
+def test_combine_flag_applies_to_non_scribe_format(tmp_path: Path) -> None:
+    """combine_chunks_per_speaker merges consecutive same-speaker camb entries too."""
+    diarization_path = tmp_path / "camb_same_speaker.json"
+    diarization_path.write_text(
+        json.dumps(
+            [
+                {"start": 0.5, "end": 1.2, "text": "hello", "speaker": "Speaker 1"},
+                {"start": 1.5, "end": 2.3, "text": "world", "speaker": "Speaker 1"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    # Default (combine=True): two same-speaker entries merge into one segment.
+    merged = load_diarization_info(
+        diarization_file=str(diarization_path),
+        diarization_format="camb",
+    )
+    assert merged is not None
+    assert len(merged.segments) == 1
+    assert merged.segments[0].speaker_id == 0
+    assert merged.segments[0].word == "hello world"
+    assert merged.segments[0].start_time == 500
+    assert merged.segments[0].end_time == 2300
+
+    # combine=False: each camb entry stays its own segment.
+    split = load_diarization_info(
+        diarization_file=str(diarization_path),
+        diarization_format="camb",
+        combine_chunks_per_speaker=False,
+    )
+    assert split is not None
+    assert len(split.segments) == 2
+    assert [seg.word for seg in split.segments] == ["hello", "world"]

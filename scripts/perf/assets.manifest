@@ -1,0 +1,10 @@
+# Benchmark assets for scripts/perf/run_perf_matrix.sh
+#
+# One video path per line (relative to repo root). Lines starting with '#'
+# and blank lines are ignored. Missing files are skipped with a warning.
+#
+# Add paths to your benchmark videos below. A mix of durations and
+# resolutions gives the most informative results.
+
+assets/sample_video_streamable.mp4
+# /path/to/your/benchmark_video.mp4

@@ -10,7 +10,7 @@ FROM base AS builder
 COPY ./client/demos/build-ffmpeg.sh /build-ffmpeg.sh
 RUN chmod +x /build-ffmpeg.sh && /build-ffmpeg.sh
 
-RUN npm install -g npm@11.11.1
+RUN npm install -g npm@11.18.0
 
 RUN apk add git
 
@@ -59,8 +59,8 @@ FROM base AS runner
 # Security: upgrade Alpine system packages to fix OpenSSL CVE-2026-2673
 RUN apk upgrade --no-cache libssl3 libcrypto3
 
-# Security: upgrade npm to 11.11.1 to fix bundled tar/minimatch/picomatch CVEs
-RUN npm install -g npm@11.11.1
+# Security: upgrade npm to 11.18.0 to fix bundled tar/minimatch/picomatch CVEs
+RUN npm install -g npm@11.18.0
 
 # Install runtime dependencies for ffmpeg (VP9 + Opus only)
 RUN apk add --no-cache \

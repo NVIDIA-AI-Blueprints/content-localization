@@ -10,7 +10,6 @@ import os
 import tempfile
 import wave
 from unittest.mock import MagicMock
-from unittest.mock import mock_open
 from unittest.mock import patch
 
 import grpc
@@ -19,14 +18,16 @@ from google.protobuf import any_pb2
 from google.protobuf import wrappers_pb2
 from grpc_health.v1 import health_pb2
 
-from client.utils import check_service_health
-from client.utils import check_streamable
-from client.utils import create_channel_credentials
-from client.utils import create_protobuf_any_value
-from client.utils import create_wav_header
-from client.utils import is_file_available
-from client.utils import read_file_content
-from client.utils import speaker_info_csv_reader
+from client.lipsync.request_generators import speaker_info_csv_reader
+from common.audio_utils import create_wav_header
+from common.health import check_service_health
+from common.media import check_streamable
+from common.media import is_file_available
+from common.proto_utils import create_protobuf_any_value
+from common.tls import create_channel_credentials
+from common.tls import read_file_content
+
+pytestmark = pytest.mark.unit
 
 
 class TestCreateWaveHeader:
@@ -108,8 +109,8 @@ class TestCreateWaveHeader:
 class TestCheckServiceHealth:
     """Test cases for check_service_health function."""
 
-    @patch("client.utils.grpc.insecure_channel")
-    @patch("client.utils.health_pb2_grpc.HealthStub")
+    @patch("common.handles.grpc.insecure_channel")
+    @patch("common.handles.health_pb2_grpc.HealthStub")
     def test_health_serving(self, mock_stub_class, mock_channel):
         """Test health check when service is serving."""
         # Mock the health check response
@@ -129,8 +130,8 @@ class TestCheckServiceHealth:
         mock_stub_class.assert_called_once()
         mock_stub.Check.assert_called_once()
 
-    @patch("client.utils.grpc.insecure_channel")
-    @patch("client.utils.health_pb2_grpc.HealthStub")
+    @patch("common.handles.grpc.insecure_channel")
+    @patch("common.handles.health_pb2_grpc.HealthStub")
     def test_health_not_serving(self, mock_stub_class, mock_channel):
         """Test health check when service is not serving."""
         # Mock the health check response
@@ -142,11 +143,11 @@ class TestCheckServiceHealth:
         mock_stub_class.return_value = mock_stub
 
         # Test the function should raise ConnectionError
-        with pytest.raises(ConnectionError, match="Service not healthy: 2"):
+        with pytest.raises(ConnectionError, match="not healthy: status=2"):
             check_service_health("localhost:50050")
 
-    @patch("client.utils.grpc.insecure_channel")
-    @patch("client.utils.health_pb2_grpc.HealthStub")
+    @patch("common.handles.grpc.insecure_channel")
+    @patch("common.handles.health_pb2_grpc.HealthStub")
     def test_health_unknown_status(self, mock_stub_class, mock_channel):
         """Test health check with unknown status."""
         # Mock the health check response
@@ -158,11 +159,11 @@ class TestCheckServiceHealth:
         mock_stub_class.return_value = mock_stub
 
         # Test the function should raise ConnectionError
-        with pytest.raises(ConnectionError, match="Service not healthy: 999"):
+        with pytest.raises(ConnectionError, match="not healthy: status=999"):
             check_service_health("localhost:50050")
 
-    @patch("client.utils.grpc.insecure_channel")
-    @patch("client.utils.health_pb2_grpc.HealthStub")
+    @patch("common.handles.grpc.insecure_channel")
+    @patch("common.handles.health_pb2_grpc.HealthStub")
     def test_health_grpc_error(self, mock_stub_class, mock_channel):
         """Test health check when gRPC call fails."""
         mock_stub = MagicMock()
@@ -171,15 +172,15 @@ class TestCheckServiceHealth:
 
         # Test the function should raise ConnectionError
         with pytest.raises(
-            ConnectionError, match="Health check failed for localhost:50050: gRPC error"
+            ConnectionError, match="localhost:50050 health check failed: gRPC error"
         ):
             check_service_health("localhost:50050")
 
-    @patch("client.utils.grpc.insecure_channel")
-    @patch("client.utils.health_pb2_grpc.HealthStub")
+    @patch("common.handles.grpc.insecure_channel")
+    @patch("common.handles.health_pb2_grpc.HealthStub")
     def test_health_rpc_error(self, mock_stub_class, mock_channel):
         """Test health check when RPC error occurs."""
-        from client.utils import grpc
+        from common.handles import grpc
 
         mock_stub = MagicMock()
         mock_stub.Check.side_effect = grpc.RpcError("RPC failed")
@@ -187,12 +188,12 @@ class TestCheckServiceHealth:
 
         # Test the function should raise ConnectionError
         with pytest.raises(
-            ConnectionError, match="Health check failed for localhost:50050: RPC failed"
+            ConnectionError, match="localhost:50050 health check failed: RPC failed"
         ):
             check_service_health("localhost:50050")
 
-    @patch("client.utils.grpc.insecure_channel")
-    @patch("client.utils.health_pb2_grpc.HealthStub")
+    @patch("common.handles.grpc.insecure_channel")
+    @patch("common.handles.health_pb2_grpc.HealthStub")
     def test_health_different_server_address(self, mock_stub_class, mock_channel):
         """Test health check with different server address."""
         # Mock the health check response
@@ -210,6 +211,24 @@ class TestCheckServiceHealth:
         # Verify the calls
         mock_channel.assert_called_once_with("192.168.1.100:8080")
 
+    @patch("common.handles.grpc.secure_channel")
+    @patch("common.handles.health_pb2_grpc.HealthStub")
+    def test_health_with_channel_credentials(self, mock_stub_class, mock_secure_channel):
+        """Test health check probes over a secure channel when credentials are given."""
+        mock_response = MagicMock()
+        mock_response.status = 1  # SERVING status
+
+        mock_stub = MagicMock()
+        mock_stub.Check.return_value = mock_response
+        mock_stub_class.return_value = mock_stub
+
+        credentials = MagicMock()
+        result = check_service_health("localhost:50050", channel_credentials=credentials)
+        assert result is True
+
+        # The credentials must be honored by the probe channel
+        mock_secure_channel.assert_called_once_with("localhost:50050", credentials)
+
     @patch("grpc.insecure_channel")
     def test_check_service_health_success(self, mock_channel):
         """Test check_service_health with successful response."""
@@ -219,7 +238,7 @@ class TestCheckServiceHealth:
         mock_stub.Check.return_value = mock_response
         mock_channel.return_value = MagicMock()
 
-        with patch("client.utils.health_pb2_grpc.HealthStub", return_value=mock_stub):
+        with patch("common.handles.health_pb2_grpc.HealthStub", return_value=mock_stub):
             result = check_service_health("localhost:50051")
             assert result is True
             mock_stub.Check.assert_called_once()
@@ -233,7 +252,7 @@ class TestCheckServiceHealth:
         mock_stub.Check.return_value = mock_response
         mock_channel.return_value = MagicMock()
 
-        with patch("client.utils.health_pb2_grpc.HealthStub", return_value=mock_stub):
+        with patch("common.handles.health_pb2_grpc.HealthStub", return_value=mock_stub):
             with pytest.raises(ConnectionError):
                 check_service_health("localhost:50051")
 
@@ -244,7 +263,7 @@ class TestCheckServiceHealth:
         mock_stub.Check.side_effect = grpc.RpcError("Connection failed")
         mock_channel.return_value = MagicMock()
 
-        with patch("client.utils.health_pb2_grpc.HealthStub", return_value=mock_stub):
+        with patch("common.handles.health_pb2_grpc.HealthStub", return_value=mock_stub):
             with pytest.raises(ConnectionError):
                 check_service_health("localhost:50051")
 
@@ -311,75 +330,111 @@ class TestFileOperations:
 class TestCheckStreamable:
     """Test cases for check_streamable function."""
 
+    def _check(self, content: bytes) -> bool:
+        """Write content to a temporary MP4 file and run check_streamable."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+        try:
+            return check_streamable(temp_file_path)
+        finally:
+            os.unlink(temp_file_path)
+
     def test_check_streamable_true(self):
         """Test check_streamable with streamable MP4."""
-        # Create a mock streamable MP4 header with at least 40 bytes
-        # Structure: [4 bytes: ftyp_size][4 bytes: "ftyp"][12 bytes: ftyp_data][padding][4 bytes: moov_size][4 bytes: "moov"][...]
-        # ftyp_size = 32, so moov should start at position 36 (ftyp_size + 4)
-        mock_header = (
-            b"\x00\x00\x00\x20"  # ftyp size (32 bytes) - positions 0-3
-            b"ftyp"  # ftyp atom - positions 4-7
-            b"isomiso2mp41"  # ftyp data (12 bytes) - positions 8-19
-            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # padding to reach position 32
-            b"\x00\x00\x00\x10"  # moov size (16 bytes) - at position 32
-            b"moov"  # moov atom - at position 36-40 (ftyp_size + 4)
-            b"\x00\x00\x00\x08"  # moov data (8 bytes)
-            b"\x00\x00\x00\x00"  # padding to reach 40+ bytes
-            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # additional padding
+        # [size=32]["ftyp"][24 bytes of brands] followed directly by moov
+        content = (
+            b"\x00\x00\x00\x20"  # ftyp size (32 bytes)
+            b"ftyp"  # ftyp atom type
+            b"isomiso2mp41"  # major brand + compatible brands (12 bytes)
+            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # padding to 32 bytes
+            b"\x00\x00\x00\x10"  # moov size (16 bytes)
+            b"moov"  # moov atom type
+            b"\x00\x00\x00\x08"  # moov data
+            b"\x00\x00\x00\x00"  # moov data
         )
 
-        with patch("builtins.open", mock_open(read_data=mock_header)):
-            result = check_streamable("test.mp4")
-            assert result is True
+        assert self._check(content) is True
 
     def test_check_streamable_false(self):
-        """Test check_streamable with non-streamable MP4."""
-        # Create a mock non-streamable MP4 header with at least 40 bytes (mdat between ftyp and moov)
-        mock_header = (
+        """Test check_streamable with non-streamable MP4 (mdat between ftyp and moov)."""
+        content = (
             b"\x00\x00\x00\x20"  # ftyp size (32 bytes)
-            b"ftyp"  # ftyp atom
-            b"isomiso2mp41"  # ftyp data (12 bytes)
+            b"ftyp"  # ftyp atom type
+            b"isomiso2mp41"  # major brand + compatible brands (12 bytes)
+            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # padding to 32 bytes
             b"\x00\x00\x00\x10"  # mdat size (16 bytes)
-            b"mdat"  # mdat atom
-            b"\x00\x00\x00\x08"  # mdat data (8 bytes)
-            b"\x00\x00\x00\x00"  # padding to reach 40+ bytes
-            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # additional padding
+            b"mdat"  # mdat atom type
+            b"\x00\x00\x00\x08"  # mdat data
+            b"\x00\x00\x00\x00"  # mdat data
         )
 
-        with patch("builtins.open", mock_open(read_data=mock_header)):
-            result = check_streamable("test.mp4")
-            assert result is False
+        assert self._check(content) is False
+
+    def test_check_streamable_large_ftyp(self):
+        """Regression test: an oversized ftyp atom must not hide a following moov atom."""
+        # A 48-byte ftyp (many compatible brands) followed directly by moov.
+        ftyp_body = b"isom" + b"iso2avc1mp41" * 3  # 40 bytes of brands
+        content = (
+            b"\x00\x00\x00\x30"  # ftyp size (48 bytes)
+            b"ftyp"  # ftyp atom type
+            + ftyp_body
+            + b"\x00\x00\x00\x10"  # moov size (16 bytes)
+            + b"moov"  # moov atom type at offset 52
+            + b"\x00" * 8  # moov data
+        )
+
+        assert self._check(content) is True
+
+    def test_check_streamable_huge_declared_ftyp_size(self):
+        """Test check_streamable with a declared ftyp size far beyond the file length.
+
+        The declared atom size is untrusted file data; a malformed size close
+        to the 32-bit maximum must return ``False`` without attempting to read
+        the declared number of bytes into memory.
+        """
+        content = (
+            b"\xff\xff\xff\xff"  # ftyp size (~4 GiB, far beyond file length)
+            b"ftyp"
+            b"isomiso2mp41"
+        )
+
+        assert self._check(content) is False
 
     def test_check_streamable_invalid_ftyp(self):
-        """Test check_streamable with invalid ftyp atom."""
-        mock_header = (
+        """Test check_streamable with invalid first atom type."""
+        content = (
             b"\x00\x00\x00\x20"  # size
-            b"invalid"  # not ftyp
-            b"isomiso2mp41"  # data (12 bytes)
-            b"\x00\x00\x00\x10"  # moov size
-            b"moov"  # moov atom
-            b"\x00\x00\x00\x08"  # moov data (8 bytes)
-            b"\x00\x00\x00\x00"  # padding to reach 40+ bytes
-            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # additional padding
+            b"free"  # not ftyp
+            b"isomiso2mp41"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\x00\x10"
+            b"moov"
+            b"\x00" * 8
         )
 
-        with patch("builtins.open", mock_open(read_data=mock_header)):
-            result = check_streamable("test.mp4")
-            assert result is False
+        assert self._check(content) is False
 
     def test_check_streamable_file_too_small(self):
-        """Test check_streamable with file too small."""
-        mock_header = b"\x00\x00\x00\x10"  # Only 4 bytes
+        """Test check_streamable with file too small for an atom header."""
+        assert self._check(b"\x00\x00\x00\x10") is False
 
-        with patch("builtins.open", mock_open(read_data=mock_header)):
-            result = check_streamable("test.mp4")
-            assert result is False
+    def test_check_streamable_truncated_after_ftyp(self):
+        """Test check_streamable when no atom header follows the ftyp atom."""
+        content = (
+            b"\x00\x00\x00\x20"  # ftyp size (32 bytes)
+            b"ftyp"
+            b"isomiso2mp41"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # file ends with ftyp
+        )
+
+        assert self._check(content) is False
 
 
 class TestChannelCredentials:
     """Test cases for create_channel_credentials function."""
 
-    @patch("client.utils.read_file_content")
+    @patch("common.tls.read_file_content")
     def test_create_channel_credentials_mtls(self, mock_read_file):
         """Test create_channel_credentials with MTLS mode."""
         mock_read_file.return_value = b"certificate_data"
@@ -397,7 +452,7 @@ class TestChannelCredentials:
             mock_read_file.assert_called()
             mock_ssl_creds.assert_called_once()
 
-    @patch("client.utils.read_file_content")
+    @patch("common.tls.read_file_content")
     def test_create_channel_credentials_tls(self, mock_read_file):
         """Test create_channel_credentials with TLS mode."""
         mock_read_file.return_value = b"certificate_data"
@@ -432,6 +487,26 @@ class TestChannelCredentials:
 
         with pytest.raises(RuntimeError):
             create_channel_credentials(args)
+
+    @patch("common.tls.read_file_content")
+    def test_create_channel_credentials_ssl_mode_override(self, mock_read_file):
+        """The ssl_mode keyword overrides args.ssl_mode for one connection."""
+        mock_read_file.return_value = b"certificate_data"
+
+        args = argparse.Namespace()
+        # args say MTLS, but the per-connection override asks for TLS: the
+        # TLS branch must run (root cert only, no client key material).
+        args.ssl_mode = "MTLS"
+        args.ssl_key = "key.pem"
+        args.ssl_cert = "cert.pem"
+        args.ssl_root_cert = "root.pem"
+
+        with patch("grpc.ssl_channel_credentials") as mock_ssl_creds:
+            mock_ssl_creds.return_value = MagicMock()
+            create_channel_credentials(args=args, ssl_mode="TLS")
+
+            mock_read_file.assert_called_once_with("root.pem")
+            mock_ssl_creds.assert_called_once_with(root_certificates=b"certificate_data")
 
 
 class TestProtobufAnyValue:
@@ -469,15 +544,18 @@ class TestProtobufAnyValue:
         assert wrapper.value == large_int
 
     def test_create_protobuf_any_value_float(self):
-        """Test create_protobuf_any_value with float value."""
-        result = create_protobuf_any_value(3.14)
+        """Test create_protobuf_any_value packs floats as DoubleValue."""
+        # A value that is not exactly representable in 32-bit floats, so
+        # a FloatValue round-trip would lose precision.
+        float_value = 3.141592653589793
+        result = create_protobuf_any_value(float_value)
         assert isinstance(result, any_pb2.Any)
+        assert result.Is(wrappers_pb2.DoubleValue.DESCRIPTOR)
 
-        # Unpack and verify
-        wrapper = wrappers_pb2.FloatValue()
+        # Unpack and verify: DoubleValue preserves Python float precision
+        wrapper = wrappers_pb2.DoubleValue()
         result.Unpack(wrapper)
-        # Use approximate equality for float comparison
-        assert abs(wrapper.value - 3.14) < 1e-6
+        assert wrapper.value == float_value
 
     def test_create_protobuf_any_value_string(self):
         """Test create_protobuf_any_value with string value."""
@@ -491,7 +569,7 @@ class TestProtobufAnyValue:
 
     def test_create_protobuf_any_value_unsupported_type(self):
         """Test create_protobuf_any_value with unsupported type."""
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             create_protobuf_any_value([1, 2, 3])
 
 

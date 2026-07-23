@@ -14,6 +14,7 @@ from nvidia.ai4m.activespeakerdetection.v1.activespeakerdetection_pb2 import (
 from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncConfig
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
 
+from client.common.audio import AUDIO_CODEC_CONFIGS
 from client.controller.config import ControllerConfig
 
 _MOCK_S2S = SpeechToSpeechConfig()
@@ -59,6 +60,7 @@ class TestControllerConfig(unittest.TestCase):
         self.args.diarization_file = "diar.json"
         self.args.bypass_asd = False
         self.args.translated_audio = None
+        self.args.lipsync_input_audio_codec = None
 
     @_apply_patches
     def test_from_args(self, *_mocks):
@@ -74,6 +76,14 @@ class TestControllerConfig(unittest.TestCase):
         self.assertIs(config.asd_config, _MOCK_ASD)
         self.assertFalse(config.bypass_asd)
         self.assertIs(config.lipsync_config, _MOCK_LIPSYNC)
+        self.assertIsNone(config.explicit_lipsync_input_audio_codec)
+
+    @_apply_patches
+    def test_from_args_preserves_explicit_lipsync_input_audio_codec(self, *_mocks):
+        """User-provided LipSync input codec stays available to callers."""
+        self.args.lipsync_input_audio_codec = "MP3"
+        config = ControllerConfig.from_args(self.args)
+        self.assertEqual(config.explicit_lipsync_input_audio_codec, "MP3")
 
     @_apply_patches
     def test_from_args_bypass_asd(self, *_mocks):
@@ -99,6 +109,50 @@ class TestControllerConfig(unittest.TestCase):
         config = ControllerConfig.from_args(self.args)
         self.assertFalse(config.bypass_asd)
         self.assertIsNotNone(config.asd_config)
+
+    @_apply_patches
+    def test_from_args_auto_bypass_opt_out_keeps_asd(self, *_mocks):
+        """auto_bypass_asd=False keeps ASD enabled without a diarization file."""
+        self.args.bypass_asd = False
+        self.args.diarization_file = None
+        config = ControllerConfig.from_args(args=self.args, auto_bypass_asd=False)
+        self.assertFalse(config.bypass_asd)
+        self.assertIsNotNone(config.asd_config)
+
+    @_apply_patches
+    @patch("client.controller.config.is_wav_file", return_value=True)
+    def test_from_args_translated_audio_sniffs_wav_codec(self, mock_is_wav, *_mocks):
+        """A translated WAV file sets the LipSync input codec to WAV."""
+        self.args.translated_audio = "translated.wav"
+        self.args.lipsync_input_audio_codec = None
+        config = ControllerConfig.from_args(self.args)
+        self.assertEqual(
+            config.lipsync_config.input_audio_codec,
+            AUDIO_CODEC_CONFIGS["wav"],
+        )
+        mock_is_wav.assert_called_once_with("translated.wav")
+
+    @_apply_patches
+    @patch("client.controller.config.is_wav_file", return_value=False)
+    def test_from_args_translated_audio_sniffs_mp3_codec(self, mock_is_wav, *_mocks):
+        """MP3 content inside a .wav filename is declared as MP3 to LipSync."""
+        self.args.translated_audio = "translated.wav"
+        self.args.lipsync_input_audio_codec = None
+        config = ControllerConfig.from_args(self.args)
+        self.assertEqual(
+            config.lipsync_config.input_audio_codec,
+            AUDIO_CODEC_CONFIGS["mp3"],
+        )
+        mock_is_wav.assert_called_once_with("translated.wav")
+
+    @_apply_patches
+    @patch("client.controller.config.is_wav_file")
+    def test_from_args_explicit_codec_skips_translated_sniff(self, mock_is_wav, *_mocks):
+        """An explicit --lipsync-input-audio-codec disables content sniffing."""
+        self.args.translated_audio = "translated.wav"
+        self.args.lipsync_input_audio_codec = "MP3"
+        ControllerConfig.from_args(self.args)
+        mock_is_wav.assert_not_called()
 
     @_apply_patches
     def test_from_args_without_io(self, *_mocks):

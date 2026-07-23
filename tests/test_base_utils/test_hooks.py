@@ -7,9 +7,11 @@ import time
 
 import pytest
 
-from base_utils import BaseHooks
-from base_utils import CleanupHooks
-from base_utils import MonitoringHooks
+from common.base_utils import BaseHooks
+from common.base_utils import CleanupHooks
+from common.base_utils import MonitoringHooks
+
+pytestmark = pytest.mark.unit
 
 
 class TestBaseHooks:

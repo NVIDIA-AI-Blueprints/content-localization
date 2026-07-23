@@ -114,6 +114,29 @@ python -m pytest functional_tests/ -v --color=yes
 python -m pytest functional_tests/ -k "test_s2s_client_basic" -v
 ```
 
+### Selecting Source and Target Languages
+
+The tests fall back to each client's built-in defaults, which use
+ElevenLabs-style language **codes** (e.g. `en`, `es`). A **CambAI** deployed
+stack expects integer language **IDs** instead, so running with the defaults
+against CambAI fails with an error such as:
+
+```text
+Invalid CambAI source language ID: en. Must be a valid CambAI integer ID string.
+```
+
+When testing against a CambAI stack, pass the source and target languages
+explicitly as CambAI integer IDs (e.g. `1` = English, `54` = Spanish):
+
+```bash
+source .venv/bin/activate && python -m pytest functional_tests/ -v --require-services \
+    --source-language 1 --target-language 54
+```
+
+The same values may instead be provided via the `TEST_SOURCE_LANGUAGE` and
+`TEST_TARGET_LANGUAGE` environment variables. See the main
+[README](../README.md) CambAI section for the full language ID mapping.
+
 ## Test Coverage
 
 Each client test includes:

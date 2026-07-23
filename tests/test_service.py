@@ -14,6 +14,8 @@ from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechResponse
 from s2s_service.service import S2SService
 from s2s_service.service import S2SServiceServicer
 
+pytestmark = pytest.mark.unit
+
 
 class MockS2SService(S2SService):
     """Mock S2S service for testing."""

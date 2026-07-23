@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: S101,PLR2004
 
-"""Unit tests for scripts.camb_audio_isolation."""
+"""Unit tests for scripts.camb.audio_isolation."""
 
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.camb_audio_isolation import fetch_separation_urls
-from scripts.camb_audio_isolation import submit_audio_separation
-from scripts.camb_audio_isolation import wait_for_separation_success
+from scripts.camb.audio_isolation import fetch_separation_urls
+from scripts.camb.audio_isolation import submit_audio_separation
+from scripts.camb.audio_isolation import wait_for_separation_success
 
 pytestmark = pytest.mark.unit
 
@@ -28,7 +28,7 @@ def test_submit_audio_separation_success(tmp_path: Path) -> None:
     mock_resp.json.return_value = {"task_id": "task-abc"}
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("scripts.camb_audio_isolation.requests.post", return_value=mock_resp) as post:
+    with patch("scripts.camb.audio_isolation.requests.post", return_value=mock_resp) as post:
         tid = submit_audio_separation(input_file_path=wav, headers=HEADERS)
 
     assert tid == "task-abc"
@@ -45,7 +45,7 @@ def test_submit_audio_separation_missing_task_id(tmp_path: Path) -> None:
     mock_resp.raise_for_status = MagicMock()
 
     with (
-        patch("scripts.camb_audio_isolation.requests.post", return_value=mock_resp),
+        patch("scripts.camb.audio_isolation.requests.post", return_value=mock_resp),
         pytest.raises(RuntimeError, match="missing task_id"),
     ):
         submit_audio_separation(input_file_path=wav, headers=HEADERS)
@@ -58,8 +58,8 @@ def test_wait_for_separation_success_returns_run_id() -> None:
     mock_resp.raise_for_status = MagicMock()
 
     with (
-        patch("scripts.camb_audio_isolation.requests.get", return_value=mock_resp),
-        patch("scripts.camb_audio_isolation.time.sleep"),
+        patch("scripts.camb.audio_isolation.requests.get", return_value=mock_resp),
+        patch("scripts.camb.audio_isolation.time.sleep"),
     ):
         rid = wait_for_separation_success(
             task_id="t1",
@@ -77,7 +77,7 @@ def test_wait_for_separation_terminal_error() -> None:
     mock_resp.raise_for_status = MagicMock()
 
     with (
-        patch("scripts.camb_audio_isolation.requests.get", return_value=mock_resp),
+        patch("scripts.camb.audio_isolation.requests.get", return_value=mock_resp),
         pytest.raises(RuntimeError, match="failed"),
     ):
         wait_for_separation_success(
@@ -97,7 +97,7 @@ def test_fetch_separation_urls() -> None:
     }
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("scripts.camb_audio_isolation.requests.get", return_value=mock_resp):
+    with patch("scripts.camb.audio_isolation.requests.get", return_value=mock_resp):
         fg, bg = fetch_separation_urls(run_id=1, headers=HEADERS)
 
     assert fg == "https://fg"
@@ -111,7 +111,7 @@ def test_fetch_separation_urls_missing_foreground() -> None:
     mock_resp.raise_for_status = MagicMock()
 
     with (
-        patch("scripts.camb_audio_isolation.requests.get", return_value=mock_resp),
+        patch("scripts.camb.audio_isolation.requests.get", return_value=mock_resp),
         pytest.raises(RuntimeError, match="foreground"),
     ):
         fetch_separation_urls(run_id=1, headers=HEADERS)

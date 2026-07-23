@@ -15,10 +15,12 @@ from pathlib import Path
 
 current_file_path = Path(__file__)
 project_root = Path(current_file_path).parent.parent.parent
-sys.path.insert(0, str(project_root))
-sys.path.insert(0, str(project_root / "src"))
-sys.path.insert(0, str(project_root / "client"))
-sys.path.insert(0, str(project_root / "protos" / "generated"))
+sys.path[:0] = [
+    str(project_root),
+    str(project_root / "src"),
+    str(project_root / "client"),
+    str(project_root / "protos" / "generated"),
+]
 print(f"{sys.path=}")
 
 # Mock problematic modules before importing s2s_service to avoid import errors during doc build
@@ -46,7 +48,6 @@ MOCK_MODULES = [
     # "face_recognition",
     # "dlib",
     "librosa",
-    "soundfile",
     "pydub",
     # scipy's internal initialization can break with certain numpy
     # versions; mock it so doc builds stay resilient.
@@ -60,21 +61,15 @@ MOCK_MODULES = [
     # "ffmpeg_python",
     "gi",
     "gi.repository",
-    ## matplotlib modules
-    # "matplotlib",
-    # "matplotlib.pyplot",
+    ## matplotlib modules (client-side latency plotting; a dev-only dependency
+    ## that is not installed in the docs build environment, so it is mocked)
+    "matplotlib",
+    "matplotlib.pyplot",
     # "matplotlib.figure",
     # "matplotlib.axes",
     # "traceback",
     # "itertools",
-    ## RIVA & ElevenLabs modules
-    "riva",
-    "riva.client",
-    "riva.client.proto",
-    "riva.client.proto.riva_asr_pb2",
-    "riva.client.proto.riva_tts_pb2",
-    "riva.client.tts",
-    "riva.client.asr",
+    ## ElevenLabs modules
     "elevenlabs",
     "elevenlabs.client",
     ## our AI4M modules
@@ -131,8 +126,6 @@ if "numpy" in sys.modules:
 
 # Mock environment variables
 os.environ["ELEVENLABS_API_KEY"] = "dummy"
-os.environ["RIVA_API_URL"] = "dummy"
-os.environ["RIVA_API_KEY"] = "dummy"
 
 import client
 import controller_service
@@ -148,9 +141,9 @@ print("Building docs with external ASD NIM integration")
 print(f"Building docs for controller service version: {controller_service.__version__}")
 
 project = "Content Localization Blueprint"
-copyright = "2026, NVIDIA"
+copyright = "2026, NVIDIA"  # noqa: A001
 author = "NVIDIA"
-release = "2.0"
+release = "1.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -182,10 +175,8 @@ autodoc_mock_imports = [
     "pathlib",
     "queue",
     "builtins",
-] + MOCK_MODULES
-
-import logging
-import warnings
+    *MOCK_MODULES,
+]
 
 # Autodoc configuration to handle duplicates
 autodoc_default_options = {

@@ -3,10 +3,10 @@
 
 """Configuration dataclass for the ASD client."""
 
-import os
 from dataclasses import dataclass
 
-from client.utils import is_file_available
+from client.common.paths import ensure_parent_dir
+from common.media import is_file_available
 
 
 @dataclass
@@ -15,7 +15,7 @@ class ASDConfig:
 
     Attributes:
         asd_server: Address and port of the ASD gRPC service.
-        input_mp4: Path to input video file (streamable MP4).
+        input_mp4: Path to input video file (MP4; streamable MP4 recommended).
         input_audio: Path to input audio file.
         output_speaker_info: Path to output CSV file for speaker info data.
         chunk_size_video_bytes: Video chunk size in bytes.
@@ -135,8 +135,6 @@ class ASDConfig:
                 "Only JSON format is supported."
             )
 
-        output_dir = os.path.dirname(self.output_speaker_info)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+        ensure_parent_dir(path=self.output_speaker_info)
 
         return True

@@ -8,7 +8,11 @@ import wave
 from collections.abc import Iterator
 from unittest.mock import MagicMock
 
+import pytest
+
 from s2s_service.service import S2SService
+
+pytestmark = pytest.mark.unit
 
 
 class _DummyService(S2SService):

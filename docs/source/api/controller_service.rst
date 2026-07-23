@@ -14,11 +14,33 @@ controller_service.service
    :members:
    :show-inheritance:
 
+controller_service.servicer
+---------------------------
+
+.. automodule:: controller_service.servicer
+   :members:
+   :show-inheritance:
+
+controller_service.pipeline
+---------------------------
+
+.. automodule:: controller_service.pipeline
+   :members:
+   :show-inheritance:
+
+controller_service.config
+-------------------------
+
+.. automodule:: controller_service.config
+   :members:
+   :show-inheritance:
+
 controller_service.deserializer
 -------------------------------
 
 .. automodule:: controller_service.deserializer
    :members:
+   :no-index:
    :show-inheritance:
 
 controller_service.stream_adapters

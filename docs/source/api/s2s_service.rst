@@ -4,7 +4,7 @@
 s2s_service package
 ====================
 
-Speech-to-Speech service with ElevenLabs and RIVA backends.
+Speech-to-Speech service with ElevenLabs and CambAI backends.
 
 s2s_service.service
 -------------------
@@ -31,34 +31,6 @@ s2s_service.el_utils.dubbing
 -----------------------------
 
 .. automodule:: s2s_service.el_utils.dubbing
-   :members:
-   :show-inheritance:
-
-s2s_service.riva_utils.asr
---------------------------
-
-.. automodule:: s2s_service.riva_utils.asr
-   :members:
-   :show-inheritance:
-
-s2s_service.riva_utils.tts
---------------------------
-
-.. automodule:: s2s_service.riva_utils.tts
-   :members:
-   :show-inheritance:
-
-s2s_service.riva_utils.s2s
---------------------------
-
-.. automodule:: s2s_service.riva_utils.s2s
-   :members:
-   :show-inheritance:
-
-s2s_service.riva_utils.servers
-------------------------------
-
-.. automodule:: s2s_service.riva_utils.servers
    :members:
    :show-inheritance:
 

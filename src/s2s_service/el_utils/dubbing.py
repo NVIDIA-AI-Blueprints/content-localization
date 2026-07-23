@@ -26,8 +26,9 @@ from google.protobuf.empty_pb2 import Empty
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechRequest
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechResponse
 
-from base_utils import logger
+from common.audio_utils import audio_mime_type
 from common.audio_utils import download_audio_file_from_iterator
+from common.base_utils import logger
 
 # Importing the base S2S service
 from s2s_service.service import S2SService
@@ -205,8 +206,9 @@ def create_dub_from_file(
     if target_accent:
         create_kwargs["target_accent"] = target_accent
 
+    mime_type = audio_mime_type(input_file_path)
     with open(input_file_path, "rb") as audio_file:
-        create_kwargs["file"] = (os.path.basename(input_file_path), audio_file, "audio/wav")
+        create_kwargs["file"] = (os.path.basename(input_file_path), audio_file, mime_type)
         response = client.dubbing.create(**create_kwargs)
 
     dubbing_id = response.dubbing_id
@@ -234,7 +236,7 @@ class ELDubbingService(S2SService):
           | 1. Extract request_id, wrap iterator
           | 2. Call: service.infer(request_iterator, context, request_id)
           v
-        S2SService (abstract, implemented by S2SRIVATransactionalService or ELDubbingService)
+        S2SService (abstract, implemented by ELDubbingService or CambDubbingService)
           |
           | (ElevenLabs Path)
           |

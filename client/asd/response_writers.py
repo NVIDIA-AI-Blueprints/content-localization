@@ -11,6 +11,23 @@ from nvidia.ai4m.activespeakerdetection.v1.activespeakerdetection_pb2 import (
     DetectActiveSpeakerResponse,
 )
 
+from common.base_utils import logger
+
+# Column order for the ASD speaker-info CSV. Exposed as a module-level constant
+# so documentation and downstream readers (e.g. the LipSync client) can derive
+# the schema from code instead of hand-copying the header.
+SPEAKER_INFO_CSV_FIELDNAMES = [
+    "frame_id",
+    "x",
+    "y",
+    "width",
+    "height",
+    "diarized_speaker_id",
+    "face_id",
+    "is_speaking",
+    "face_detection_confidence",
+]
+
 
 def write_asd_outputs_from_response(
     response_iter: Iterator[DetectActiveSpeakerResponse],
@@ -35,24 +52,13 @@ def write_asd_outputs_from_response(
     response_count = 0
     Path(output_csv_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_csv_path, "w", newline="", encoding="utf-8") as csvfile:
-        fieldnames = [
-            "frame_id",
-            "x",
-            "y",
-            "width",
-            "height",
-            "diarized_speaker_id",
-            "face_id",
-            "is_speaking",
-            "face_detection_confidence",
-        ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer = csv.DictWriter(csvfile, fieldnames=SPEAKER_INFO_CSV_FIELDNAMES)
         writer.writeheader()
 
         for response in response_iter:
             response_count += 1
             if response_count % 100 == 0:
-                print(f"Processing ASD Response: {response_count}")
+                logger.debug(f"Processing ASD Response: {response_count}")
 
             # Extract the active speaker detection result
             if response.HasField("active_speaker_detection_result"):
@@ -89,4 +95,4 @@ def write_asd_outputs_from_response(
                         }
                     )
 
-    print(f"ASD data written to {output_csv_path} ({response_count} responses processed).")
+    logger.info(f"ASD data written to {output_csv_path} ({response_count} responses processed).")
