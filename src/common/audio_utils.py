@@ -4,12 +4,68 @@
 """Audio file I/O utilities (download, WAV writing, header generation)."""
 
 import io
+import os
 import wave
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from base_utils import logger
+from common.base_utils import logger
+
+_AUDIO_MIME_TYPES: dict[str, str] = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+}
+
+
+def is_wav_file(file_path: str | os.PathLike) -> bool:
+    """Return True if the file starts with a RIFF (WAV) magic header.
+
+    Reads the first 4 bytes only — does not validate the full WAV structure.
+    Use this instead of checking file extensions, which can be misleading
+    (e.g. ElevenLabs sometimes returns MP3 data with a ``.wav`` extension).
+
+    Args:
+        file_path (str | os.PathLike): Path to the audio file.
+
+    Returns:
+        bool: ``True`` if the file starts with ``RIFF``.
+
+    Examples:
+        >>> is_wav_file("audio.wav")  # doctest: +SKIP
+        True
+        >>> is_wav_file("audio.mp3")  # doctest: +SKIP
+        False
+    """
+    with open(file_path, "rb") as f:
+        return f.read(4) == b"RIFF"
+
+
+def audio_mime_type(file_path: str | os.PathLike) -> str:
+    """Return the MIME type for an audio file based on its extension.
+
+    Used when uploading files to external APIs (ElevenLabs, CambAI) that
+    require a ``Content-Type`` header. Falls back to ``"audio/wav"`` for
+    unrecognised extensions.
+
+    Args:
+        file_path (str | os.PathLike): Path to the audio file.
+
+    Returns:
+        str: MIME type string (e.g. ``"audio/mpeg"`` for MP3).
+
+    Examples:
+        >>> audio_mime_type("clip.mp3")
+        'audio/mpeg'
+        >>> audio_mime_type("clip.wav")
+        'audio/wav'
+        >>> audio_mime_type("clip.unknown")
+        'audio/wav'
+    """
+    return _AUDIO_MIME_TYPES.get(Path(file_path).suffix.lower(), "audio/wav")
 
 
 def download_audio_file_from_iterator(

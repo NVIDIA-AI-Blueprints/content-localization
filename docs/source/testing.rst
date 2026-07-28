@@ -60,7 +60,9 @@ All test outputs are preserved in ``functional_tests/outputs/`` directory:
 
 * ``controller_comprehensive_output.mp4``
 * ``direct_comprehensive_output.mp4``
+* ``direct_comprehensive_audio.mp3``
 * ``s2s_comprehensive_output.mp3``
+* ``s2s_comprehensive_latency_plot.png``
 * ``lipsync_comprehensive_output.mp4``
 * ``asd_comprehensive_output.csv``
 

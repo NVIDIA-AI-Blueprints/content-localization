@@ -10,6 +10,7 @@ shared helpers so all clients use identical configuration knobs.
 import argparse
 
 from client.asd.args import add_asd_config_args_to_parser
+from client.diarization_args import add_diarization_args
 from client.lipsync.args import add_lipsync_config_args_to_parser
 from client.s2s.args import add_s2s_config_args_to_parser
 
@@ -68,20 +69,14 @@ def argsfactory() -> argparse.ArgumentParser:
         default=1,
         help="Chunk size for streaming audio in seconds (default: 1)",
     )
-    parser.add_argument(
-        "--latency-plot",
-        type=str,
-        default="outputs/latency.png",
-        help="Path to the latency plot (default: outputs/latency.png)",
-    )
 
     parser.add_argument(
         "--input-mp4",
         type=str,
         default="assets/sample_video_streamable.mp4",
-        help="Path to input video file, streamable mp4 only. "
-        "If your file is not streamable mp4, you can convert to streamable mp4 using the script "
-        "provided at: scripts/convert_to_streamable_mp4.sh "
+        help="Path to input video file, MP4. Streamable MP4 is recommended for best "
+        "performance but not required; convert using the script provided at: "
+        "scripts/misc/convert_to_streamable_mp4.sh "
         "(default: assets/sample_video_streamable.mp4)",
     )
 
@@ -100,38 +95,13 @@ def argsfactory() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--output-speaker-info",
-        type=str,
-        default="assets/asd_speaker_info.csv",
-        help="Path to output speaker info CSV file. (default: assets/asd_speaker_info.csv)",
-    )
-    parser.add_argument(
         "--bypass-asd",
         action="store_true",
         default=False,
         help="Bypass ASD (Active Speaker Detection) service. "
         "Auto-enabled when no --diarization-file is provided.",
     )
-    parser.add_argument(
-        "--diarization-file",
-        type=str,
-        default=None,
-        help="Path to JSON diarization file for speaker segments. "
-        "Supports flat ASD format, native RIVA diarization JSON, or "
-        "ElevenLabs STT JSON. Use --diarization-format to select the parser "
-        "(default: auto-detect). "
-        "Generate with: scripts/riva_parakeet_diarize.py, "
-        "scripts/el_diarize.py, or scripts/camb_diarize.py",
-    )
-    parser.add_argument(
-        "--diarization-format",
-        type=str,
-        default="elevenlabs",
-        choices=["flat", "riva", "elevenlabs", "elevenlabs-studio", "camb"],
-        help="Format of the diarization JSON file. "
-        "'camb' for Camb AI transcription JSON "
-        "(generate with scripts/camb_diarize.py) (default: elevenlabs).",
-    )
+    add_diarization_args(parser=parser)
 
     parser.add_argument(
         "--background-audio-input",

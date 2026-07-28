@@ -4,7 +4,7 @@
 """S2S (Speech-to-Speech) client package.
 
 This package provides a client for the S2S service, which translates and synthesizes
-audio content using either RIVA or ElevenLabs backends.
+audio content using ElevenLabs or CambAI backends.
 
 Components
 ==========
@@ -32,7 +32,7 @@ Features
 ========
 
 - Real-time speech-to-speech translation
-- Support for RIVA and ElevenLabs backends
+- Support for ElevenLabs and CambAI backends
 - Multiple language support
 - Voice customization options
 - Latency analysis and monitoring

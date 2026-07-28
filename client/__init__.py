@@ -11,7 +11,10 @@ It provides clients for:
 - S2S (Speech-to-Speech) Service
 - LipSync Service
 - Batch Processing (runs the pipeline on every video in a directory)
-- Source simulators for testing
+
+Shared client helpers and source/sink simulators live under the ``common``
+package (``common.health``, ``common.media``, ``common.tls``,
+``common.proto_utils``, ``common.context``, ``common.source_sink``).
 
 Client Types
 ============
@@ -32,10 +35,6 @@ Batch Processing Client
 -----------------------
 Runs the end-to-end pipeline on every video in a directory and produces
 a timing report.
-
-Source Simulators
-------------------
-Utilities for simulating audio and video input streams for testing.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"

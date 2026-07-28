@@ -19,11 +19,12 @@ apk add --no-cache \
     libvpx-dev \
     opus-dev
 
-echo "Downloading ffmpeg 8.0..."
+echo "Downloading ffmpeg 8.1.2..."
 cd /tmp
-wget https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz
-tar xf ffmpeg-8.0.tar.xz
-cd ffmpeg-8.0
+wget https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+echo "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c  ffmpeg-8.1.2.tar.xz" | sha256sum -c -
+tar xf ffmpeg-8.1.2.tar.xz
+cd ffmpeg-8.1.2
 
 echo "Configuring ffmpeg with LGPL-only, royalty-free codecs (VP9 + Opus only)..."
 ./configure \
@@ -46,7 +47,7 @@ make install
 
 echo "Cleaning up..."
 cd /
-rm -rf /tmp/ffmpeg-8.0*
+rm -rf /tmp/ffmpeg-8.1.2*
 
 echo "ffmpeg installation complete!"
 ffmpeg -version

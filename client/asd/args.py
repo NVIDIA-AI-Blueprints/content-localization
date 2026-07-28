@@ -28,6 +28,8 @@ from nvidia.ai4m.audio.v1.audio_pb2 import AudioConfig
 from nvidia.ai4m.video.v1.video_pb2 import VIDEO_CODEC_H264
 from nvidia.ai4m.video.v1.video_pb2 import VideoConfig
 
+from client.diarization_args import add_diarization_args
+
 KB = 1024
 
 _AUDIO_CODEC_MAP = {"WAV": AUDIO_CODEC_WAV, "MP3": AUDIO_CODEC_MP3}
@@ -81,7 +83,10 @@ def add_asd_config_args_to_parser(
         type=str,
         default=default_audio_source,
         choices=list(_AUDIO_SOURCE_CONFIG_MAP.keys()),
-        help="Where audio originates: separate stream or embedded in video (default: unspecified)",
+        help=(
+            "Where audio originates: separate stream or embedded in video "
+            f"(default: {default_audio_source})"
+        ),
     )
     parser.add_argument(
         "--asd-speaker-detection-threshold",
@@ -144,9 +149,9 @@ def argsfactory() -> argparse.ArgumentParser:
         "--input-mp4",
         type=str,
         default="assets/sample_video_streamable.mp4",
-        help="Path to input video file, streamable mp4 only. "
-        "If your file is not streamable mp4, you can convert to streamable mp4 using the script "
-        "provided at: scripts/convert_to_streamable_mp4.sh "
+        help="Path to input video file, MP4. Streamable MP4 is recommended for best "
+        "performance but not required; convert using the script provided at: "
+        "scripts/misc/convert_to_streamable_mp4.sh "
         "(default: assets/sample_video_streamable.mp4)",
     )
     parser.add_argument(
@@ -169,25 +174,7 @@ def argsfactory() -> argparse.ArgumentParser:
         default=1.0,
         help="Chunk size for streaming audio in seconds (default: 1.0)",
     )
-    parser.add_argument(
-        "--diarization-file",
-        type=str,
-        default=None,
-        help="Path to optional diarization file for speaker segments. "
-        "Supports flat ASD format, native RIVA diarization JSON, "
-        "ElevenLabs STT JSON, or ElevenLabs Studio CSV. "
-        "Use --diarization-format to select the parser "
-        "(default: auto-detect).",
-    )
-    parser.add_argument(
-        "--diarization-format",
-        type=str,
-        default="elevenlabs",
-        choices=["flat", "riva", "elevenlabs", "elevenlabs-studio", "camb"],
-        help="Format of the diarization file. "
-        "'camb' for Camb AI transcription JSON "
-        "(generate with scripts/camb_diarize.py) (default: elevenlabs).",
-    )
+    add_diarization_args(parser=parser)
     parser.add_argument(
         "--output-speaker-info",
         type=str,

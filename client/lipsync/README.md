@@ -36,10 +36,10 @@ Streamable MP4 (moov atom at the start) is recommended for best performance but 
 
 ```bash
 python client/lipsync/app.py \
-    --target 127.0.0.1:50054 \
-    --video-input assets/sample_video_streamable.mp4 \
-    --audio-input assets/sample_audio.wav \
-    --output outputs/lipsync_output.mp4 \
+    --lipsync-server 127.0.0.1:50054 \
+    --input-mp4 assets/sample_video_streamable.mp4 \
+    --input-audio assets/sample_audio.wav \
+    --output-mp4 outputs/lipsync_output.mp4 \
     --lipsync-output-bitrate-mbps 30 \
     --lipsync-output-idr-interval 16 \
     --lipsync-extend-video reverse \
@@ -52,9 +52,9 @@ When speaker bounding boxes are available (e.g., from the ASD NIM), provide them
 
 ```bash
 python client/lipsync/app.py \
-    --target 127.0.0.1:50054 \
-    --video-input assets/sample_video_streamable.mp4 \
-    --audio-input assets/sample_audio.wav \
+    --lipsync-server 127.0.0.1:50054 \
+    --input-mp4 assets/sample_video_streamable.mp4 \
+    --input-audio assets/sample_audio.wav \
     --speaker-info-input assets/asd_speaker_info.csv \
     --lipsync-is-speaker-info-provided
 ```
@@ -65,19 +65,19 @@ Mix background audio (music, ambient sound) into the output video:
 
 ```bash
 python client/lipsync/app.py \
-    --target 127.0.0.1:50054 \
-    --video-input assets/sample_video_streamable.mp4 \
-    --audio-input assets/sample_audio.wav \
+    --lipsync-server 127.0.0.1:50054 \
+    --input-mp4 assets/sample_video_streamable.mp4 \
+    --input-audio assets/sample_audio.wav \
     --background-audio-input assets/background.mp3 \
     --lipsync-background-audio-volume 0.5 \
-    --output outputs/lipsync_output.mp4
+    --output-mp4 outputs/lipsync_output.mp4
 ```
 
 ### Lossless Encoding
 
 ```bash
 python client/lipsync/app.py \
-    --target 127.0.0.1:50054 \
+    --lipsync-server 127.0.0.1:50054 \
     --lipsync-lossless
 ```
 
@@ -87,7 +87,7 @@ python client/lipsync/app.py \
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--target` | `127.0.0.1:50054` | IP:port of the LipSync gRPC service |
+| `--lipsync-server` | `127.0.0.1:50054` | IP:port of the LipSync gRPC service (`--target` is a deprecated alias) |
 | `--ssl-mode` | `DISABLED` | SSL mode (`DISABLED`, `MTLS`, or `TLS`) |
 | `--ssl-key` | `../ssl_key/ssl_key_client.pem` | Path to SSL private key |
 | `--ssl-cert` | `../ssl_key/ssl_cert_client.pem` | Path to SSL certificate chain |
@@ -97,11 +97,11 @@ python client/lipsync/app.py \
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--video-input` | `assets/sample_video_streamable.mp4` | Path to input video file (MP4) |
-| `--audio-input` | `assets/sample_audio.wav` | Path to input audio file (WAV or MP3) |
+| `--input-mp4` | `assets/sample_video_streamable.mp4` | Path to input video file (MP4; `--video-input` is a deprecated alias) |
+| `--input-audio` | `assets/sample_audio.wav` | Path to input audio file (WAV or MP3; `--audio-input` is a deprecated alias) |
 | `--speaker-info-input` | `None` | Path to speaker info CSV file (from ASD) |
 | `--background-audio-input` | `None` | Path to background audio file (WAV or MP3) for mixing |
-| `--output` | `outputs/lipsync_output.mp4` | Path for the output video file |
+| `--output-mp4` | `outputs/lipsync_output.mp4` | Path for the output video file (`--output` is a deprecated alias) |
 
 ### LipSync Configuration
 
@@ -186,10 +186,10 @@ docker compose --profile controller-third-party-s2s --env-file configs/elevenlab
 
 # 2. Run the LipSync client
 python client/lipsync/app.py \
-    --target 127.0.0.1:50054 \
-    --video-input assets/sample_video_streamable.mp4 \
-    --audio-input assets/sample_audio.wav \
-    --output outputs/lipsync_output.mp4
+    --lipsync-server 127.0.0.1:50054 \
+    --input-mp4 assets/sample_video_streamable.mp4 \
+    --input-audio assets/sample_audio.wav \
+    --output-mp4 outputs/lipsync_output.mp4
 
 # 3. Check the output
 ls -la outputs/lipsync_output.mp4

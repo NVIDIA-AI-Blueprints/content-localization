@@ -4,14 +4,18 @@
  */
 
 /**
- * Camb AI transcription API client for diarization.
+ * Camb AI API client for diarization and audio isolation (voice separation).
  *
- * Three-step flow: POST /transcribe → poll GET /transcribe/{task_id}
+ * Diarization flow: POST /transcribe → poll GET /transcribe/{task_id}
  * → GET /transcription-result/{run_id}?word_level_timestamps=true
+ *
+ * Isolation flow: POST /audio-separation → poll GET /audio-separation/{task_id}
+ * → GET /audio-separation-result/{run_id} → download foreground_audio_url
  */
 
 import fs from "fs";
 import path from "path";
+import { spawn } from "child_process";
 import logger from "../../utils/logger";
 
 const CAMB_API_BASE_URL = "https://client.camb.ai/apis";
@@ -165,4 +169,123 @@ export async function saveCambAiDiarizationFile(streamId: string, data: any, out
   await fs.promises.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
   logger.info(`Camb AI diarization saved to ${filePath}`);
   return filePath;
+}
+
+/**
+ * Isolate foreground voice from background using Camb AI audio separation.
+ * Flow: POST /audio-separation → poll → fetch foreground_audio_url → download → convert to WAV.
+ * @param audioFilePath - Path to the input audio file
+ * @param outputPath - Path where the isolated WAV will be saved
+ * @returns Promise resolving to outputPath
+ */
+export async function isolateAudio(audioFilePath: string, outputPath: string): Promise<string> {
+  if (!CAMB_API_KEY) {
+    throw new Error("CAMB_API_KEY not set. Cannot perform Camb AI audio isolation.");
+  }
+  if (!fs.existsSync(audioFilePath)) {
+    throw new Error(`Audio file not found: ${audioFilePath}`);
+  }
+
+  logger.info(`Starting Camb AI audio isolation for: ${audioFilePath}`);
+
+  const outputDir = path.dirname(outputPath);
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  // Step 1: submit
+  const fileBuffer = fs.readFileSync(audioFilePath);
+  const fileName = path.basename(audioFilePath);
+  const formData = new FormData();
+  formData.append("media_file", new Blob([fileBuffer]), fileName);
+
+  const submitRes = await fetch(`${CAMB_API_BASE_URL}/audio-separation`, {
+    method: "POST",
+    headers: { "x-api-key": CAMB_API_KEY },
+    body: formData,
+  });
+  if (!submitRes.ok) {
+    throw new Error(`Camb /audio-separation failed (${submitRes.status}): ${await submitRes.text()}`);
+  }
+  const submitData = await submitRes.json();
+  const taskId = String(submitData.task_id ?? "");
+  if (!taskId) throw new Error(`Camb /audio-separation missing task_id: ${JSON.stringify(submitData)}`);
+  logger.info(`Camb AI isolation submitted: taskId=${taskId}`);
+
+  // Step 2: poll
+  let runId: number | null = null;
+  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    const pollRes = await fetch(`${CAMB_API_BASE_URL}/audio-separation/${taskId}`, {
+      headers: { "x-api-key": CAMB_API_KEY },
+    });
+    if (!pollRes.ok) {
+      throw new Error(`Camb isolation poll failed (${pollRes.status}): ${await pollRes.text()}`);
+    }
+    const pollData = await pollRes.json();
+    const status = String(pollData.status ?? "").toUpperCase();
+    if (status === "SUCCESS") {
+      runId = pollData.run_id;
+      break;
+    }
+    if (["ERROR", "TIMEOUT", "PAYMENT_REQUIRED"].includes(status)) {
+      throw new Error(`Camb audio-separation failed: status=${status}, message=${pollData.message}`);
+    }
+  }
+  if (runId == null) {
+    throw new Error(`Camb audio-separation timed out after ${MAX_POLL_ATTEMPTS} attempts`);
+  }
+  logger.info(`Camb AI isolation completed: runId=${runId}`);
+
+  // Step 3: fetch foreground URL
+  const resultRes = await fetch(`${CAMB_API_BASE_URL}/audio-separation-result/${runId}`, {
+    headers: { "x-api-key": CAMB_API_KEY },
+  });
+  if (!resultRes.ok) {
+    throw new Error(`Camb /audio-separation-result failed (${resultRes.status}): ${await resultRes.text()}`);
+  }
+  const resultData = await resultRes.json();
+  const fgUrl = resultData.foreground_audio_url;
+  if (!fgUrl) throw new Error(`Camb separation-result missing foreground_audio_url: ${JSON.stringify(resultData)}`);
+
+  // Step 4: download foreground and convert to WAV
+  const dlRes = await fetch(fgUrl);
+  if (!dlRes.ok) throw new Error(`Camb foreground download failed (${dlRes.status})`);
+
+  const tempPath = `${outputPath}.tmp`;
+  const arrayBuffer = await dlRes.arrayBuffer();
+  fs.writeFileSync(tempPath, Buffer.from(arrayBuffer));
+
+  await new Promise<void>((resolve, reject) => {
+    const ffmpeg = spawn("ffmpeg", ["-y", "-i", tempPath, outputPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    ffmpeg.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+    ffmpeg.on("close", (code) => {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        /* ignore */
+      }
+      if (code === 0) {
+        logger.info(`Camb AI isolation completed. Output saved to: ${outputPath} (converted to WAV)`);
+        resolve();
+      } else {
+        reject(new Error(`ffmpeg failed (${code}): ${stderr.slice(-500)}`));
+      }
+    });
+    ffmpeg.on("error", (err) => {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        /* ignore */
+      }
+      reject(err);
+    });
+  });
+
+  return outputPath;
 }

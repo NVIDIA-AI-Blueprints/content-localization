@@ -19,6 +19,7 @@ from nvidia.ai4m.audio.v1.audio_pb2 import AUDIO_CODEC_WAV
 from nvidia.ai4m.controller.v1.controller_pb2 import ContentLocalizationRequest
 from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncConfig
 from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncInputData
+from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncRequest
 
 from client.asd.args import asd_config_from_args
 from client.direct.pipeline import background_audio_iterator_from_file
@@ -66,8 +67,8 @@ class TestToLipsyncBackgroundAudio(unittest.TestCase):
         req = ContentLocalizationRequest(background_audio_data=b"\x01\x02\x03")
         result = to_lipsync_background_audio(req)
 
-        self.assertIsInstance(result, LipsyncInputData)
-        self.assertEqual(result.background_audio_file_data, b"\x01\x02\x03")
+        self.assertIsInstance(result, LipsyncRequest)
+        self.assertEqual(result.input.background_audio_file_data, b"\x01\x02\x03")
 
     def test_raises_when_no_background_audio(self) -> None:
         """ValueError raised when background_audio_data is missing."""
@@ -227,8 +228,8 @@ class TestLipsyncRequestGeneratorBackgroundAudio(unittest.TestCase):
 
     def test_without_background_audio(self) -> None:
         """Generator works normally when background_audio_iter is None."""
-        video = iter([LipsyncInputData(video_file_data=b"v")])
-        audio = iter([LipsyncInputData(audio_file_data=b"a")])
+        video = iter([LipsyncRequest(input=LipsyncInputData(video_file_data=b"v"))])
+        audio = iter([LipsyncRequest(input=LipsyncInputData(audio_file_data=b"a"))])
         config = LipsyncConfig()
 
         requests = list(
@@ -247,9 +248,9 @@ class TestLipsyncRequestGeneratorBackgroundAudio(unittest.TestCase):
 
     def test_with_background_audio(self) -> None:
         """Background audio chunks are interleaved in the output."""
-        video = iter([LipsyncInputData(video_file_data=b"v")])
-        audio = iter([LipsyncInputData(audio_file_data=b"a")])
-        bg = iter([LipsyncInputData(background_audio_file_data=b"bg")])
+        video = iter([LipsyncRequest(input=LipsyncInputData(video_file_data=b"v"))])
+        audio = iter([LipsyncRequest(input=LipsyncInputData(audio_file_data=b"a"))])
+        bg = iter([LipsyncRequest(input=LipsyncInputData(background_audio_file_data=b"bg"))])
         config = LipsyncConfig()
 
         requests = list(
@@ -275,14 +276,14 @@ class TestLipsyncRequestGeneratorBackgroundAudio(unittest.TestCase):
         self.assertEqual(bg_data, [b"bg"])
 
     def test_background_audio_longer_than_streams(self) -> None:
-        """Background audio extends beyond video/audio via zip_longest."""
-        video = iter([LipsyncInputData(video_file_data=b"v")])
-        audio = iter([LipsyncInputData(audio_file_data=b"a")])
+        """Background audio extends beyond video/audio via concurrent merging."""
+        video = iter([LipsyncRequest(input=LipsyncInputData(video_file_data=b"v"))])
+        audio = iter([LipsyncRequest(input=LipsyncInputData(audio_file_data=b"a"))])
         bg = iter(
             [
-                LipsyncInputData(background_audio_file_data=b"bg1"),
-                LipsyncInputData(background_audio_file_data=b"bg2"),
-                LipsyncInputData(background_audio_file_data=b"bg3"),
+                LipsyncRequest(input=LipsyncInputData(background_audio_file_data=b"bg1")),
+                LipsyncRequest(input=LipsyncInputData(background_audio_file_data=b"bg2")),
+                LipsyncRequest(input=LipsyncInputData(background_audio_file_data=b"bg3")),
             ]
         )
         config = LipsyncConfig()

@@ -9,7 +9,7 @@ import pytest
 
 from client.direct.stream_adapters import speaker_info_from_asd_response
 from common.nims import ActiveSpeakerDetectionClient
-from common.nims import ActiveSpeakerDetectionServer
+from common.nims import ActiveSpeakerDetectionHandle
 
 
 @pytest.mark.unit
@@ -124,10 +124,10 @@ class TestASDClient:
 
     def test_asd_client_connection(self):
         """Test ASD client connection setup."""
-        server = ActiveSpeakerDetectionServer(host="localhost", port=50051)
-        client = ActiveSpeakerDetectionClient(server=server)
+        handle = ActiveSpeakerDetectionHandle(host="localhost", port=50051)
+        client = ActiveSpeakerDetectionClient(handle=handle)
 
-        assert client.server == server
+        assert client.handle == handle
 
 
 if __name__ == "__main__":

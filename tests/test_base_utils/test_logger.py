@@ -13,7 +13,7 @@ from ai4m_base_utils.logger import JsonFormatter
 from ai4m_base_utils.logger import LoggerAdapter
 from ai4m_base_utils.logger import SafeFormatter
 
-from base_utils import logger as global_logger
+pytestmark = pytest.mark.unit
 
 
 class TestSafeFormatter:

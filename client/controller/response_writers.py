@@ -3,14 +3,15 @@
 
 """Controller client response writers (video output from controller responses)."""
 
-import os
 import time
 from collections.abc import Iterator
 
 from nvidia.ai4m.controller.v1.controller_pb2 import ContentLocalizationResponse
 
+from client.common.paths import ensure_parent_dir
 from client.controller.request_generators import FORWARD_PRESSURE_DELAY_SECS
-from client.source_simulators.video import VideoSinkSimulator
+from common.base_utils import logger
+from common.source_sink.grpc.video import VideoSinkSimulator
 
 
 def write_output_from_response(
@@ -34,7 +35,7 @@ def write_output_from_response(
         ... )  # doctest: +SKIP
     """
     # Create output directory if it doesn't exist
-    os.makedirs(os.path.dirname(output_mp4_path), exist_ok=True)
+    ensure_parent_dir(path=output_mp4_path)
 
     # Create video sink simulator
     output_video_sink = VideoSinkSimulator(
@@ -52,9 +53,9 @@ def write_output_from_response(
                 chunk_count += 1
                 output_video_sink.write(video_bytes=response.video_file_data)
                 if chunk_count % 100 == 0:
-                    print(f"Controller | received chunk: {chunk_count}")
-    except Exception as e:
-        print(f"Error writing video output: {e}")
+                    logger.debug(f"Controller | received chunk: {chunk_count}")
+    except Exception:
+        logger.exception("Error writing video output")
         raise
     finally:
         # Ensure we flush and close the sink
@@ -62,5 +63,5 @@ def write_output_from_response(
             output_video_sink.flush()
             output_video_sink.close()
 
-    print(f"Controller | processed {chunk_count} video chunks")
-    print(f"Controller | output written to: {output_mp4_path}")
+    logger.info(f"Controller | processed {chunk_count} video chunks")
+    logger.info(f"Controller | output written to: {output_mp4_path}")

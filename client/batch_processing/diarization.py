@@ -5,34 +5,39 @@
 
 Generates diarization JSON files using the ElevenLabs Speech-to-Text
 (Scribe) API or Camb AI Transcription API, reusing utilities from
-``scripts/el_diarize.py`` and ``scripts/camb_diarize.py``.
+``common.diarization.elevenlabs`` and ``common.diarization.camb``.
 Skips generation when a diarization file already exists on disk.
+
+Both helpers produce **source-language** diarization aligned with the
+input audio — this is what ASD expects. We deliberately do not use the
+Camb AI dubbing API (``scripts/camb/s2s_infer.py``) here because its
+transcript output is target-language only.
 """
 
 import json
 import os
 
-from elevenlabs import ElevenLabs
+from client.common.paths import ensure_parent_dir
+from common.base_utils import logger
+from common.diarization.camb import extract_diarization_stats as camb_extract_stats
+from common.diarization.camb import get_transcription_result
+from common.diarization.camb import submit_transcription
+from common.diarization.camb import wait_for_transcription
+from common.diarization.elevenlabs import extract_diarization_stats
+from common.diarization.elevenlabs import transcribe
 
-from scripts.camb_diarize import extract_diarization_stats as camb_extract_stats
-from scripts.camb_diarize import get_transcription_result
-from scripts.camb_diarize import submit_transcription
-from scripts.camb_diarize import wait_for_transcription
-from scripts.el_diarize import extract_diarization_stats
-from scripts.el_diarize import response_to_native_json
 
-
-def _get_elevenlabs_client() -> ElevenLabs:
-    """Build an ElevenLabs client from the environment.
+def _get_elevenlabs_api_key() -> str:
+    """Read the ElevenLabs API key from the environment.
 
     Returns:
-        ElevenLabs: Authenticated client instance.
+        str: The ElevenLabs API key.
 
     Raises:
         ValueError: If ``ELEVENLABS_API_KEY`` is not set.
 
     Examples:
-        >>> client = _get_elevenlabs_client()  # doctest: +SKIP
+        >>> key = _get_elevenlabs_api_key()  # doctest: +SKIP
     """
     api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
@@ -40,7 +45,7 @@ def _get_elevenlabs_client() -> ElevenLabs:
             "ELEVENLABS_API_KEY environment variable not set. "
             "Export it before running batch processing."
         )
-    return ElevenLabs(api_key=api_key)
+    return api_key
 
 
 def _get_camb_headers() -> dict[str, str]:
@@ -83,22 +88,15 @@ def generate_diarization(
     Examples:
         >>> path = generate_diarization("a.wav", "d.json")  # doctest: +SKIP
     """
-    os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
+    ensure_parent_dir(path=output_json_path)
 
-    client = _get_elevenlabs_client()
+    api_key = _get_elevenlabs_api_key()
 
-    print(f"  Generating diarization via ElevenLabs STT: {audio_path}")
-    with open(audio_path, "rb") as audio_file:
-        response = client.speech_to_text.convert(
-            file=audio_file,
-            model_id="scribe_v2",
-            diarize=True,
-            timestamps_granularity="word",
-        )
+    logger.info(f"  Generating diarization via ElevenLabs STT: {audio_path}")
+    native_response = transcribe(file_path=audio_path, api_key=api_key)
 
-    native_response = response_to_native_json(response)
     words_count, speaker_count = extract_diarization_stats(native_response)
-    print(f"  Diarization: {words_count} words, {speaker_count} speakers")
+    logger.info(f"  Diarization: {words_count} words, {speaker_count} speakers")
 
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(native_response, f, indent=2, ensure_ascii=False)
@@ -128,11 +126,11 @@ def generate_camb_diarization(
     Examples:
         >>> path = generate_camb_diarization("a.wav", "d.json")  # doctest: +SKIP
     """
-    os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
+    ensure_parent_dir(path=output_json_path)
 
     headers = _get_camb_headers()
 
-    print(f"  Generating diarization via Camb AI: {audio_path}")
+    logger.info(f"  Generating diarization via Camb AI: {audio_path}")
     task_id = submit_transcription(
         file_path=audio_path,
         language_id=language_id,
@@ -142,7 +140,7 @@ def generate_camb_diarization(
     result = get_transcription_result(run_id=run_id, headers=headers)
 
     segment_count, speaker_count = camb_extract_stats(result)
-    print(f"  Diarization: {segment_count} segments, {speaker_count} speakers")
+    logger.info(f"  Diarization: {segment_count} segments, {speaker_count} speakers")
 
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
@@ -180,7 +178,7 @@ def ensure_diarization(
     diarization_path = os.path.join(diarization_dir, f"{video_stem}.json")
 
     if os.path.isfile(diarization_path):
-        print(f"  Reusing existing diarization: {diarization_path}")
+        logger.info(f"  Reusing existing diarization: {diarization_path}")
         return diarization_path
 
     if s2s_service == "CAMB_DUBBING":

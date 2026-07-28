@@ -31,8 +31,8 @@ dubbing pipeline built on NVIDIA AI services and gRPC streaming.
        end
 
        subgraph externalServices [External Services]
-           rivaServices[RIVA ASR + TTS]
            elevenLabs[ElevenLabs]
+           cambAi[CambAI]
        end
 
        controllerClient --> controllerService
@@ -48,8 +48,8 @@ dubbing pipeline built on NVIDIA AI services and gRPC streaming.
        controllerService --> asdService
        controllerService --> lipService
 
-       s2sService --> rivaServices
        s2sService --> elevenLabs
+       s2sService --> cambAi
 
 AI Services
 -----------
@@ -63,8 +63,8 @@ to another. Two backends are supported:
 - **ElevenLabs**: Cloud-based dubbing API with voice cloning,
   multi-speaker detection, and profanity filtering. Produces
   MP3 output.
-- **RIVA**: NVIDIA on-prem ASR (Canary-1B) and TTS (Magpie
-  Zeroshot). Produces WAV output.
+- **CambAI**: Cloud-based dubbing API for translated speech.
+  Produces MP3 output for downstream LipSync.
 
 **Active Speaker Detection (ASD)** analyzes video and audio
 together to identify which face is speaking in each frame.
@@ -95,17 +95,17 @@ and calls ``_distribute()`` on each item. Subclasses decide
 which buffer gets which item. When the stream ends,
 ``_on_complete()`` marks all buffers done.
 
-**GRPCInferenceServer** (``common.service``) is an abstract
+**GRPCInferenceHandle** (``common.service``) is an abstract
 gRPC client wrapper that manages a channel and stub. Concrete
-subclasses (``SpeechToSpeechServer``,
-``ActiveSpeakerDetectionServer``, ``LipsyncServer``) each know
+subclasses (``SpeechToSpeechHandle``,
+``ActiveSpeakerDetectionHandle``, ``LipsyncHandle``) each know
 which RPC to call.
 
 **Client** (``common.clients``) reads requests from an iterator,
-calls a ``GRPCInferenceServer``, and writes responses to an
+calls a ``GRPCInferenceHandle``, and writes responses to an
 output buffer. Concrete implementations
 (``SpeechToSpeechClient``, ``ActiveSpeakerDetectionClient``,
-``LipsyncClient``) stream responses from the server into the
+``LipsyncClient``) stream responses from the service into the
 buffer, skipping keep-alive messages.
 
 Multi-Threaded Pipeline
@@ -210,7 +210,7 @@ The key data flow through the controller proto:
 Client Types
 ------------
 
-Six standalone clients cover different use cases:
+Several standalone clients cover different use cases:
 
 - **Controller** (``client/controller/app.py``): Full end-to-end
   pipeline via the Controller service. Recommended for

@@ -15,9 +15,8 @@ flowchart LR
     asdConn --> asdService[ASDService]
     lipConn --> lipService[LipSyncService]
 
-    s2sService --> rivaAsr[RivaASR]
-    s2sService --> rivaTts[RivaTTS]
     s2sService --> elevenLabs[ElevenLabs]
+    s2sService --> cambAi[CambAI]
 
     audioSource --> s2sService
     videoSource --> asdService

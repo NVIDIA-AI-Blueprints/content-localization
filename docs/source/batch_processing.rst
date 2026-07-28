@@ -43,7 +43,7 @@ environment and sets ``PYTHONPATH`` automatically:
 
 .. code-block:: bash
 
-   ./scripts/run_evaluation.sh --input-dir assets/
+   ./scripts/misc/run_evaluation.sh --input-dir assets/
 
 Or run the Python module directly:
 
@@ -110,9 +110,23 @@ Batch Processing Arguments
    * - ``--chunk-size-video-bytes``
      - ``1048576`` (1 MB)
      - Video chunk size in bytes for streaming.
-   * - ``--diarization-rows-per-chunk``
-     - ``10``
-     - Number of diarization segment rows per chunk. Use -1 to send all segments in one message.
+   * - ``--s2s-service``
+     - ``EL_DUBBING``
+     - S2S backend (``EL_DUBBING`` or ``CAMB_DUBBING``); also selects the
+       diarization provider.
+   * - ``--bypass-s2s``
+     - ``False``
+     - Skip S2S and feed pre-translated audio directly to LipSync (ASD still
+       runs). See ``--translated-audio-dir``.
+   * - ``--translated-audio-dir``
+     - ``None``
+     - Directory of pre-translated audio files named ``{video_stem}.wav`` or
+       ``{video_stem}.mp3``, used when ``--bypass-s2s`` is set. When omitted,
+       each video's own extracted source audio is used as a timing stand-in.
+   * - ``--diarization-chunked-per-segment``
+     - ``False``
+     - Stream one diarization chunk per source segment instead of merging
+       consecutive same-speaker segments.
 
 S2S Arguments
 ~~~~~~~~~~~~~
@@ -128,8 +142,11 @@ S2S Arguments
      - ``en``
      - Source language code for speech-to-speech translation.
    * - ``--target-language``
-     - ``es``
+     - ``de``
      - Target language code for speech-to-speech translation.
+   * - ``--voice-name``
+     - ``None``
+     - Voice name for TTS (optional; service uses default if unset).
    * - ``--elevenlabs-num-speakers``
      - ``0``
      - Number of speakers for ElevenLabs dubbing. 0 = auto-detect.
@@ -266,7 +283,7 @@ A machine-readable JSON report is saved to
          "preprocess_time_secs": 2.3,
          "pipeline_time_secs": 45.7,
          "total_time_secs": 48.0,
-         "output_path": "outputs/batch_processing/video_01_es.mp4",
+         "output_path": "outputs/batch_processing/video_01_de.mp4",
          "output_size_bytes": 12902400,
          "success": true,
          "error_message": null,
@@ -293,8 +310,8 @@ Output Directory Structure
    ├── preprocessed/
    │   ├── video_01.wav           # Extracted audio (16 kHz mono)
    │   └── video_02.wav
-   ├── video_01_es.mp4            # Translated output video
-   ├── video_02_es.mp4
+   ├── video_01_de.mp4            # Translated output video
+   ├── video_02_de.mp4
    └── batch_processing_report.json  # JSON report
 
 ----
@@ -306,7 +323,7 @@ Translate all videos to French:
 
 .. code-block:: bash
 
-   ./scripts/run_evaluation.sh \
+   ./scripts/misc/run_evaluation.sh \
        --input-dir /data/my_videos \
        --target-language fr
 
@@ -314,7 +331,7 @@ Specify a custom output directory and controller address:
 
 .. code-block:: bash
 
-   ./scripts/run_evaluation.sh \
+   ./scripts/misc/run_evaluation.sh \
        --input-dir /data/my_videos \
        --output-dir outputs/eval_run_1 \
        --controller-server 10.0.0.5:50056
@@ -323,7 +340,7 @@ Adjust chunking parameters for large videos:
 
 .. code-block:: bash
 
-   ./scripts/run_evaluation.sh \
+   ./scripts/misc/run_evaluation.sh \
        --input-dir /data/my_videos \
        --chunk-size-audio-secs 2.0 \
        --chunk-size-video-bytes 2097152
@@ -399,7 +416,7 @@ No Videos Found
 * Verify the ``--input-dir`` path exists and contains ``.mp4`` files.
 * Only ``.mp4`` files are discovered; other formats (e.g., ``.avi``,
   ``.mkv``) must be converted first. Use
-  ``scripts/convert_to_streamable_mp4.sh`` to convert.
+  ``scripts/misc/convert_to_streamable_mp4.sh`` to convert.
 
 Pipeline Failure for a Single Video
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

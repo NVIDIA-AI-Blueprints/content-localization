@@ -45,8 +45,8 @@ The Controller Client provides a simplified interface to the Content Localizatio
            ASD-->>CS: SpeakerDetectionResponse(roiData)
        end
 
-       CS->>LS: Animate(videoData,audioData,roiData)
-       LS-->>CS: AnimateResponse(videoFileData)
+       CS->>LS: Lipsync(videoData,audioData,roiData)
+       LS-->>CS: LipsyncResponse(videoFileData)
        CS-->>CC: ContentLocalizationResponse(videoFileData)
 
 
@@ -226,11 +226,12 @@ standalone step first, then feed its output into the LipSync client:
 
    # 2. Run LipSync standalone with the pre-computed speaker info
    python client/lipsync/app.py \
-       --video-input input.mp4 \
-       --audio-input translated_audio.wav \
+       --input-mp4 input.mp4 \
+       --input-audio translated_audio.mp3 \
        --speaker-info-input assets/asd_speaker_info.csv \
        --lipsync-is-speaker-info-provided \
-       --output outputs/lipsync_output.mp4
+       --lipsync-input-audio-codec MP3 \
+       --output-mp4 outputs/lipsync_output.mp4
 
 Direct Client
 -------------
@@ -256,9 +257,8 @@ The Direct Client provides full control over service interactions through multip
        asdConn --> asdService[ASDNIM]
        lipConn --> lipService[LipSyncService]
 
-       s2sService --> rivaAsr[RivaASR]
-       s2sService --> rivaTts[RivaTTS]
        s2sService --> elevenLabs[ElevenLabs]
+       s2sService --> cambAi[CambAI]
 
        audioSource --> s2sService
        videoSource --> asdService
@@ -389,7 +389,7 @@ Features
 * Voice selection and parameter tuning
 * Latency analysis and throughput metrics
 * WAV/MP3 format support
-* RIVA or ElevenLabs backend
+* ElevenLabs or CambAI backend
 
 Example Usage
 ~~~~~~~~~~~~~
@@ -436,20 +436,20 @@ Example Usage
 .. code-block:: bash
 
    python client/lipsync/app.py \
-       --target localhost:50054 \
-       --video-input assets/video.mp4 \
-       --audio-input assets/audio.wav \
-       --output outputs/video_output.mp4
+       --lipsync-server localhost:50054 \
+       --input-mp4 assets/video.mp4 \
+       --input-audio assets/audio.wav \
+       --output-mp4 outputs/video_output.mp4
 
 With background audio:
 
 .. code-block:: bash
 
    python client/lipsync/app.py \
-       --target localhost:50054 \
-       --video-input assets/video.mp4 \
-       --audio-input assets/audio.wav \
-       --output outputs/video_output.mp4 \
+       --lipsync-server localhost:50054 \
+       --input-mp4 assets/video.mp4 \
+       --input-audio assets/audio.wav \
+       --output-mp4 outputs/video_output.mp4 \
        --background-audio-input background_music.wav \
        --lipsync-background-audio-volume 0.4
 
@@ -470,8 +470,9 @@ speaker detection.
        asdApp --> roiWriter[ROIOutputWriter]
        asdApp --> asdStub[ActiveSpeakerDetectionStub]
        diarizationLoader --> flatFormat[FlatJSON]
-       diarizationLoader --> rivaFormat[RivaJSON]
        diarizationLoader --> elevenLabsFormat[ElevenLabsJSON]
+       diarizationLoader --> elevenLabsDubbingApiFormat[ElevenLabsDubbingAPIJSON]
+       diarizationLoader --> cambFormat[CambAIJSON]
        asdStub --> asdService[ActiveSpeakerDetectionService]
        asdStub --> asdReq[DetectActiveSpeakerRequest]
        asdStub --> asdResp[DetectActiveSpeakerResponse]
@@ -481,8 +482,8 @@ Features
 
 * Video and audio input processing
 * Speaker detection with optional diarization data
-* Multi-format diarization loading (flat, RIVA, ElevenLabs
-  JSON) via ``--diarization-file``
+* Multi-format diarization loading (flat, ElevenLabs STT, ElevenLabs
+  Dubbing API, ElevenLabs Studio, and CambAI JSON) via ``--diarization-file``
 * Per-frame speaker info output in CSV format
 * Configurable audio source (``--asd-audio-source-config``)
 * Adjustable speaker detection threshold
@@ -532,7 +533,7 @@ Example Usage
 
 .. code-block:: bash
 
-   ./scripts/run_evaluation.sh --input-dir assets/
+   ./scripts/misc/run_evaluation.sh --input-dir assets/
 
 Or directly:
 

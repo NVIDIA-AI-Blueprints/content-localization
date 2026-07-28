@@ -7,13 +7,9 @@
 
 import argparse
 
-from base_utils import logger
+from common.base_utils import logger
 from s2s_service.camb_utils.dubbing import CambDubbingService
 from s2s_service.el_utils.dubbing import ELDubbingService
-from s2s_service.riva_utils.s2s import S2SRIVAStreamingService
-from s2s_service.riva_utils.s2s import S2SRIVATransactionalService
-from s2s_service.riva_utils.servers import RivaASRServer
-from s2s_service.riva_utils.servers import RivaTTSServer
 
 
 def main() -> None:
@@ -27,22 +23,11 @@ def main() -> None:
     5. Handles the service lifecycle
     """
     parser = argparse.ArgumentParser(
-        description="Speech-to-Speech (S2S) gRPC entrypoint supporting RIVA and "
-        "ElevenLabs backends."
+        description=(
+            "Speech-to-Speech (S2S) gRPC entrypoint supporting ElevenLabs and CambAI backends."
+        )
     )
     subparsers = parser.add_subparsers(dest="service", required=True, help="S2S backend to use")
-
-    # RIVA Transactional subcommand
-    riva_transactional_parser = subparsers.add_parser(
-        name="riva_transactional", help="Run with NVIDIA RIVA transactional backend"
-    )
-    S2SRIVATransactionalService.argsfactory(parser=riva_transactional_parser)
-
-    # RIVA Streaming subcommand
-    riva_streaming_parser = subparsers.add_parser(
-        name="riva_streaming", help="Run with NVIDIA RIVA streaming backend"
-    )
-    S2SRIVAStreamingService.argsfactory(parser=riva_streaming_parser)
 
     # EL Dubbing subcommand
     el_dubbing_parser = subparsers.add_parser("el_dubbing", help="Run with ElevenLabs backend")
@@ -58,31 +43,7 @@ def main() -> None:
 
     logger.debug(f"args: {args}")
 
-    if args.service == "riva_transactional":
-        # Choosing to the run the RIVA service
-        service = S2SRIVATransactionalService(
-            ast_server=RivaASRServer.from_string(url=args.ast_server),
-            tts_server=RivaTTSServer.from_string(url=args.tts_server),
-            sample_rate_hz=args.sample_rate_hz,
-            default_voice_name=args.default_voice_name,
-            default_source_language=args.default_source_language,
-            default_target_language=args.default_target_language,
-            message_size=args.message_size,
-            audio_format=args.audio_format,
-        )
-    elif args.service == "riva_streaming":
-        service = S2SRIVAStreamingService(
-            ast_server=RivaASRServer.from_string(url=args.ast_server),
-            tts_server=RivaTTSServer.from_string(url=args.tts_server),
-            sample_rate_hz=args.sample_rate_hz,
-            default_voice_name=args.default_voice_name,
-            default_source_language=args.default_source_language,
-            default_target_language=args.default_target_language,
-            message_size=args.message_size,
-            audio_format=args.audio_format,
-        )
-    elif args.service == "el_dubbing":
-        # Choosing to the run the EL service
+    if args.service == "el_dubbing":
         service = ELDubbingService(
             sample_rate_hz=args.sample_rate_hz,
             default_source_language=args.default_source_language,
@@ -101,14 +62,18 @@ def main() -> None:
     else:
         parser.error(f"Unknown service: {args.service}")
 
-    # TODO: Add full-support for SSL in a future MR.
+    # Forward the server-side SSL surface the vendored
+    # GRPCServiceBase.argsfactory already exposes (--use-ssl,
+    # --ssl_server_key_path, --ssl_server_cert_path,
+    # --ssl_root_cert_path), matching the controller entrypoint.
+    # Plaintext remains the default.
     service.serve(
         service_uri=args.service_uri,
         max_concurrency=args.max_concurrency,
-        use_ssl=False,
-        ssl_server_key_path=None,
-        ssl_server_cert_path=None,
-        ssl_root_cert_path=None,
+        use_ssl=args.use_ssl,
+        ssl_server_key_path=args.ssl_server_key_path,
+        ssl_server_cert_path=args.ssl_server_cert_path,
+        ssl_root_cert_path=args.ssl_root_cert_path,
         concurrency_mode=args.concurrency_mode,
         threads_per_process=args.threads_per_process,
     )

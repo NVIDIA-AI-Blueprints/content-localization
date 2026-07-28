@@ -6,6 +6,7 @@
 import argparse
 
 from client.asd.args import add_asd_config_args_to_parser
+from client.diarization_args import add_diarization_args
 from client.lipsync.args import add_lipsync_config_args_to_parser
 from client.s2s.args import add_s2s_config_args_to_parser
 
@@ -40,10 +41,45 @@ def argsfactory() -> argparse.ArgumentParser:
         "--input-mp4",
         type=str,
         default="assets/sample_video_streamable.mp4",
-        help="Path to input video file, streamable mp4 only. "
-        "If your file is not streamable mp4, you can convert to streamable mp4 using the script "
-        "provided at: scripts/convert_to_streamable_mp4.sh "
+        help="Path to input video file, MP4. Streamable MP4 is recommended for best "
+        "performance but not required; convert using the script provided at: "
+        "scripts/misc/convert_to_streamable_mp4.sh "
         "(default: assets/sample_video_streamable.mp4)",
+    )
+    # SSL configuration for the controller channel, mirroring the
+    # standalone NIM clients' --ssl-mode surface.
+    parser.add_argument(
+        "--ssl-mode",
+        type=str,
+        choices=["DISABLED", "TLS", "MTLS"],
+        default="DISABLED",
+        help="Channel security for the controller connection (default: DISABLED)",
+    )
+    parser.add_argument(
+        "--ssl-key",
+        type=str,
+        default=None,
+        help="Path to the client private key PEM (required for MTLS)",
+    )
+    parser.add_argument(
+        "--ssl-cert",
+        type=str,
+        default=None,
+        help="Path to the client certificate chain PEM (required for MTLS)",
+    )
+    parser.add_argument(
+        "--ssl-root-cert",
+        type=str,
+        default=None,
+        help="Path to the root certificate PEM used to verify the controller "
+        "(required for TLS and MTLS)",
+    )
+    parser.add_argument(
+        "--request-id",
+        type=str,
+        default=None,
+        help="Correlation id stamped on every request message and echoed by the "
+        "controller in its responses. Omit to generate a UUID4 per run.",
     )
     parser.add_argument(
         "--chunk-size-audio-secs",
@@ -63,27 +99,7 @@ def argsfactory() -> argparse.ArgumentParser:
         default="outputs/controller_output.mp4",
         help="Path to output video file, mp4 only. Default: outputs/controller_output.mp4",
     )
-    parser.add_argument(
-        "--diarization-file",
-        type=str,
-        default=None,
-        help="Path to diarization file for speaker segments. "
-        "Supports flat ASD format, native RIVA diarization JSON, "
-        "ElevenLabs STT JSON, or ElevenLabs Studio CSV. "
-        "Use --diarization-format to select the parser "
-        "(default: auto-detect). "
-        "Generate with: scripts/riva_parakeet_diarize.py, "
-        "scripts/el_diarize.py, or scripts/camb_diarize.py",
-    )
-    parser.add_argument(
-        "--diarization-format",
-        type=str,
-        default="elevenlabs",
-        choices=["flat", "riva", "elevenlabs", "elevenlabs-studio", "camb"],
-        help="Format of the diarization file. "
-        "'camb' for Camb AI transcription JSON "
-        "(generate with scripts/camb_diarize.py) (default: elevenlabs).",
-    )
+    add_diarization_args(parser=parser)
 
     parser.add_argument(
         "--bypass-asd",

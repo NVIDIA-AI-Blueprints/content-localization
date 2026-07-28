@@ -7,7 +7,7 @@
 import time
 import typing
 
-from base_utils import logger
+from common.base_utils import logger
 
 
 def sentence_segmentizer(chunks: typing.Iterator[str]) -> typing.Iterator[str]:

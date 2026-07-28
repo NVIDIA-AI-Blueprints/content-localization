@@ -12,7 +12,6 @@ from typing import NoReturn
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechRequest
@@ -45,21 +44,16 @@ def create_test_wav_file(duration_seconds: float = 1.0, sample_rate: int = 16000
     Returns:
         Path to the temporary WAV file.
     """
-    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    temp_file.close()
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+        temp_name = temp_file.name
 
-    frequency = 440
-    t = np.linspace(0, duration_seconds, int(sample_rate * duration_seconds))
-    audio_data = np.sin(2 * np.pi * frequency * t) * 32767
-    audio_data = audio_data.astype(np.int16)
-
-    with wave.open(temp_file.name, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        wav.writeframes(audio_data.tobytes())
-
-    return temp_file.name
+    n_frames = int(sample_rate * duration_seconds)
+    with wave.open(temp_name, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * n_frames)
+    return temp_name
 
 
 @pytest.mark.unit
@@ -75,7 +69,7 @@ class TestCambDubbingServiceInit(unittest.TestCase):
         self.assertEqual(service.sample_rate_hz, 16000)
         self.assertEqual(service.default_source_language, "1")
         self.assertEqual(service.default_target_language, "54")
-        self.assertEqual(service.audio_format, "wav")
+        self.assertEqual(service.audio_format, "mp3")
 
     def test_initialization_custom(self) -> None:
         """Custom initialization should override defaults."""
@@ -148,19 +142,19 @@ class TestCambDubbingServiceLanguages(unittest.TestCase):
 class TestCambDubbingServiceAudioFormat(unittest.TestCase):
     """Test audio format validation."""
 
-    def test_mp3_invalid(self) -> None:
-        """MP3 should not be valid — CambAI always outputs WAV."""
+    def test_mp3_valid(self) -> None:
+        """MP3 should be valid — CambAI alt-format output is MP3."""
         from s2s_service.camb_utils.dubbing import CambDubbingService
 
         service = CambDubbingService()
-        self.assertFalse(service.validate_audio_format("mp3"))
+        self.assertTrue(service.validate_audio_format("mp3"))
 
-    def test_wav_valid(self) -> None:
-        """WAV should be valid — CambAI always outputs WAV."""
+    def test_wav_invalid(self) -> None:
+        """WAV should not be valid for the CambAI MP3 output path."""
         from s2s_service.camb_utils.dubbing import CambDubbingService
 
         service = CambDubbingService()
-        self.assertTrue(service.validate_audio_format("wav"))
+        self.assertFalse(service.validate_audio_format("wav"))
 
     def test_unsupported_format(self) -> None:
         """Unsupported formats should be invalid."""
@@ -176,9 +170,8 @@ class TestCambDubbingServiceAudioFormat(unittest.TestCase):
 class TestCambDubbingServiceImpl(unittest.TestCase):
     """Test _impl method."""
 
-    @patch("s2s_service.camb_utils.dubbing._convert_flac_to_wav")
     @patch("s2s_service.camb_utils.dubbing.download_output_audio_to_file")
-    @patch("s2s_service.camb_utils.dubbing.get_output_audio_url")
+    @patch("s2s_service.camb_utils.dubbing.get_alt_format_output_audio_url")
     @patch("s2s_service.camb_utils.dubbing.wait_for_completion")
     @patch("s2s_service.camb_utils.dubbing.submit_dub_task")
     @patch("s2s_service.camb_utils.dubbing.upload_local_file")
@@ -187,11 +180,10 @@ class TestCambDubbingServiceImpl(unittest.TestCase):
         mock_upload: MagicMock,
         mock_submit: MagicMock,
         mock_wait: MagicMock,
-        mock_get_url: MagicMock,
+        mock_get_alt_url: MagicMock,
         mock_download: MagicMock,
-        mock_convert: MagicMock,
     ) -> None:
-        """Successful _impl should yield audio responses."""
+        """Successful _impl should yield audio responses in MP3 format."""
         from s2s_service.camb_utils.dubbing import CambDubbingService
 
         service = CambDubbingService()
@@ -201,17 +193,14 @@ class TestCambDubbingServiceImpl(unittest.TestCase):
         mock_upload.return_value = "f-123"
         mock_submit.return_value = "task-abc"
         mock_wait.return_value = 42
-        mock_get_url.return_value = "https://cdn/dubbed.flac"
+        mock_get_alt_url.return_value = "https://cdn/dubbed.mp3"
 
-        # Create a real WAV file that _convert_flac_to_wav "produces"
-        wav_file = create_test_wav_file()
-        mock_convert.return_value = Path(wav_file)
+        def write_mp3(*, audio_url: str, output_file: Path) -> Path:
+            del audio_url
+            output_file.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\x00" * 100)
+            return output_file
 
-        # Create a dummy FLAC file for download mock
-        flac_tmp = tempfile.NamedTemporaryFile(suffix=".flac", delete=False)
-        flac_tmp.write(b"\x00" * 100)
-        flac_tmp.close()
-        mock_download.return_value = Path(flac_tmp.name)
+        mock_download.side_effect = write_mp3
 
         input_file = create_test_wav_file()
 
@@ -226,19 +215,19 @@ class TestCambDubbingServiceImpl(unittest.TestCase):
                 )
             )
 
-            # Should have audio responses in WAV format
+            # Should have audio responses in MP3 format
             audio_responses = [r for r in responses if r.audio_data]
             self.assertGreater(len(audio_responses), 0)
             for resp in audio_responses:
-                self.assertEqual(resp.audio_format, "wav")
+                self.assertEqual(resp.audio_format, "mp3")
 
             mock_upload.assert_called_once()
             mock_submit.assert_called_once()
             mock_wait.assert_called_once()
-            mock_convert.assert_called_once()
+            mock_get_alt_url.assert_called_once()
         finally:
-            if Path(flac_tmp.name).exists():
-                Path(flac_tmp.name).unlink()
+            if Path(input_file).exists():
+                Path(input_file).unlink()
 
     @patch("s2s_service.camb_utils.dubbing.upload_local_file")
     def test_impl_upload_error(self, mock_upload: MagicMock) -> None:
@@ -436,49 +425,6 @@ class TestCambDubbingServiceArgsfactory(unittest.TestCase):
         self.assertTrue(hasattr(args, "sample_rate_hz"))
         self.assertTrue(hasattr(args, "default_source_language"))
         self.assertTrue(hasattr(args, "audio_format"))
-
-
-@pytest.mark.unit
-class TestConvertFlacToWav(unittest.TestCase):
-    """Test _convert_flac_to_wav FLAC→WAV conversion."""
-
-    def test_flac_converted_to_wav(self) -> None:
-        """Valid FLAC file should be converted to WAV."""
-        import soundfile as sf_test
-
-        from s2s_service.camb_utils.dubbing import _convert_flac_to_wav
-
-        # Create a real FLAC file using soundfile
-        flac_tmp = tempfile.NamedTemporaryFile(suffix=".flac", delete=False)
-        flac_tmp.close()
-        sample_rate = 16000
-        audio_data = np.zeros(sample_rate, dtype=np.float32)
-        sf_test.write(flac_tmp.name, data=audio_data, samplerate=sample_rate)
-
-        try:
-            wav_path = _convert_flac_to_wav(Path(flac_tmp.name))
-            self.assertTrue(wav_path.exists())
-            self.assertEqual(wav_path.suffix, ".wav")
-            # Verify the WAV file is readable
-            with wave.open(str(wav_path), "rb") as wf:
-                self.assertEqual(wf.getframerate(), sample_rate)
-                self.assertEqual(wf.getnchannels(), 1)
-        finally:
-            Path(flac_tmp.name).unlink(missing_ok=True)
-            wav_path.unlink(missing_ok=True)
-
-    def test_invalid_file_raises(self) -> None:
-        """Non-audio file should raise an error."""
-        from s2s_service.camb_utils.dubbing import _convert_flac_to_wav
-
-        tmp = tempfile.NamedTemporaryFile(suffix=".flac", delete=False)
-        tmp.write(b"\x00" * 40)
-        tmp.close()
-        try:
-            with self.assertRaises(Exception):
-                _convert_flac_to_wav(Path(tmp.name))
-        finally:
-            Path(tmp.name).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

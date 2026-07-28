@@ -66,12 +66,6 @@ Get your NGC API keys from: https://ngc.nvidia.com/setup/api-key
    * - ``ASD_API_KEY``
      - ASD NIM container
      - When using Active Speaker Detection
-   * - ``AST_API_KEY``
-     - RIVA ASR NIM container
-     - When using the RIVA backend
-   * - ``TTS_API_KEY``
-     - RIVA TTS NIM container
-     - When using the RIVA backend
 
 **Third-party API keys** — required only when using the corresponding S2S backend:
 
@@ -84,7 +78,8 @@ Get your NGC API keys from: https://ngc.nvidia.com/setup/api-key
    * - ``ELEVENLABS_API_KEY``
      - When ``S2S_SERVICE=EL_DUBBING``
    * - ``CAMB_API_KEY``
-     - When using CAMB.AI dubbing scripts
+     - When ``S2S_SERVICE=CAMB_DUBBING`` (and for the CAMB.AI helper
+       scripts)
 
 Setup Steps
 -----------
@@ -101,8 +96,6 @@ Create a ``.env`` file in the project root with your credentials:
    # NIM container keys (mapped to NGC_API_KEY inside each container by docker-compose.yml)
    LIPSYNC_API_KEY=your_ngc_api_key_here
    ASD_API_KEY=your_ngc_api_key_here
-   AST_API_KEY=your_ngc_api_key_here      # RIVA backend only
-   TTS_API_KEY=your_ngc_api_key_here      # RIVA backend only
 
    # Third-party S2S backend keys
    ELEVENLABS_API_KEY=your_11labs_api_key_here
@@ -141,14 +134,14 @@ Install the project dependencies and commonly used extras:
 .. code-block:: bash
 
    # Install core dependencies with non-GPU extras (test, lint, docs)
-   uv pip install -r pyproject.toml --extra test --extra lint --extra docs
+   uv sync --extra test --extra lint --extra docs
 
 Install GPU extras only on hosts with CUDA Toolkit headers available (``cuda.h``):
 
 .. code-block:: bash
 
    # Optional: install GPU extras (requires CUDA Toolkit development headers)
-   uv pip install -r pyproject.toml --extra gpu
+   uv sync --extra gpu
 
 5. Install Development Tools
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -213,10 +206,6 @@ the services you intend to run are required:
    # LipSync NIM (mapped to NGC_API_KEY inside the lipsync container)
    LIPSYNC_API_KEY=<your_ngc_api_key>
 
-   # RIVA backend (mapped to NGC_API_KEY inside AST/TTS containers)
-   AST_API_KEY=<your_ngc_api_key>
-   TTS_API_KEY=<your_ngc_api_key>
-
    # Active Speaker Detection (mapped to NGC_API_KEY inside the ASD container)
    ASD_API_KEY=<your_ngc_api_key>
 
@@ -231,13 +220,13 @@ For automated setup, use the provided script:
 .. code-block:: bash
 
    # Full setup including Docker and GPU drivers
-   ./scripts/setup_env.sh
+   ./scripts/misc/setup_env.sh
 
    # Development setup (adds lint and pre-commit tools)
-   ./scripts/setup_env.sh --dev
+   ./scripts/misc/setup_env.sh --dev
 
    # Skip Docker and GPU driver installation
-   ./scripts/setup_env.sh --no-docker --no-gpu --dev
+   ./scripts/misc/setup_env.sh --no-docker --no-gpu --dev
 
 This script automatically performs all the setup steps above.
 

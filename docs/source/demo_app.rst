@@ -66,12 +66,6 @@ The easiest way to run the demo application is using Docker Compose profiles:
        --env-file .env \
        up --build
 
-   # With RIVA
-   docker compose --profile demo-app-riva \
-       --env-file configs/riva.env \
-       --env-file .env \
-       up --build
-
 Please select the profile name and environment file to suit your needs.
 
 **Access the application:**
@@ -237,14 +231,13 @@ The demo app can be configured through environment variables in
    S2S_DEFAULT_TARGET_LANGUAGE=de
 
    # Enable advanced settings (voice isolation, diarization upload).
-   # Set to false for RIVA profiles.
    REFERENCE_APP_ENABLE_PREPROCESSING=true
 
 Configure Available Languages
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Available languages are determined automatically by the ``S2S_SERVICE``
-environment variable (``EL_DUBBING`` or ``RIVA_TRANSACTIONAL``). The ``/api/configs/general`` endpoint returns the
+environment variable (``EL_DUBBING`` or ``CAMB_DUBBING``). The ``/api/configs/general`` endpoint returns the
 supported language lists and validated defaults for the active backend.
 
 To modify the language lists themselves, edit

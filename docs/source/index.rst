@@ -41,8 +41,8 @@ deployments.
        end
 
        subgraph s2sBackends [S2S Backends]
-           rivaServices[RIVA ASR + TTS]
            elevenLabs[ElevenLabs Dubbing API]
+           cambAi[CambAI Dubbing API]
        end
 
        controllerClient --> controllerService
@@ -78,8 +78,8 @@ deployments.
 
        lipService --> controllerService
 
-       s2sService --> rivaServices
        s2sService --> elevenLabs
+       s2sService --> cambAi
 
 .. toctree::
    :maxdepth: 2
@@ -94,12 +94,14 @@ deployments.
    configuration
    client
    client_quickstart
+   cli_reference
+   diarization_formats
    client_troubleshooting
    demo_app
    testing
    utilities
    logging
-   profiling
+   benchmarking
    batch_processing
 
 

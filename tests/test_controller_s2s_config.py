@@ -9,6 +9,10 @@ import os
 import sys
 import unittest
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 # Add the project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "."))
 sys.path.insert(0, project_root)
@@ -83,8 +87,8 @@ class TestControllerS2SConfig(unittest.TestCase):
         self.assertEqual(s2s_request.audio_num_channels, 1)
         self.assertEqual(s2s_request.audio_format, "mp3")
 
-    def test_config_and_audio_request(self):
-        """Test request with both config and audio data."""
+    def test_payload_oneof_keeps_only_the_last_field_set(self):
+        """Setting config then audio keeps only the audio payload."""
         # Arrange
         both_request = ContentLocalizationRequest()
         both_request.s2s_config.source_language = "en-US"
@@ -96,11 +100,9 @@ class TestControllerS2SConfig(unittest.TestCase):
             both_request
         )
 
-        # Assert
-        self.assertTrue(s2s_request.HasField("config"))
+        # Assert: the payload oneof holds the audio; the config was displaced.
+        self.assertFalse(s2s_request.HasField("config"))
         self.assertTrue(s2s_request.HasField("audio_data"))
-        self.assertEqual(s2s_request.config.source_language, "en-US")
-        self.assertEqual(s2s_request.config.target_language, "es")
         self.assertEqual(len(s2s_request.audio_data), len(b"fake_audio_data"))
         self.assertEqual(s2s_request.audio_sample_rate, 16000)
         self.assertEqual(s2s_request.audio_num_channels, 1)

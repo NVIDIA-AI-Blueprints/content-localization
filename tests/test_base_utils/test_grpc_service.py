@@ -11,9 +11,11 @@ from unittest.mock import patch
 import pytest
 from ai4m_base_utils.config import AI4M_DEFAULT_SERVICE_GRPC_URI
 
-from base_utils import AI4M_DEFAULT_MESSAGE_SIZE
-from base_utils import GRPCServiceBase
-from base_utils import ServiceConfigurationError
+from common.base_utils import AI4M_DEFAULT_MESSAGE_SIZE
+from common.base_utils import GRPCServiceBase
+from common.base_utils import ServiceConfigurationError
+
+pytestmark = pytest.mark.unit
 
 
 # Concrete implementation for testing the abstract base class

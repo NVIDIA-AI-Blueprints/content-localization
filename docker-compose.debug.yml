@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Opt-in debug override for the controller service.
+#
+# Publishes the debugpy port and enables the VS Code debug workflow (the
+# entrypoint installs debugpy at container start when
+# CONTROLLER_VS_CODE_DEBUG=1). Compose cannot conditionally publish ports, so
+# the debug mapping lives here instead of docker-compose.yml. Usage:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.debug.yml \
+#     --profile <profile> --env-file configs/elevenlabs.env --env-file .env up
+services:
+  controller:
+    ports:
+      # Bound to loopback so the debugpy control port is never reachable from
+      # other hosts; use an SSH tunnel for remote debugging.
+      - 127.0.0.1:${CONTROLLER_DEBUG_PORT}:${CONTROLLER_DEBUG_PORT}
+    environment:
+      - CONTROLLER_VS_CODE_DEBUG=1

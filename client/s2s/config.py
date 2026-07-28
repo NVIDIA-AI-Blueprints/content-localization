@@ -3,10 +3,10 @@
 
 """Configuration dataclass for the S2S client."""
 
-import os
 from dataclasses import dataclass
 
-from client.utils import is_file_available
+from client.common.paths import ensure_parent_dir
+from common.media import is_file_available
 
 
 def _parse_camb_dictionaries(raw: str | None) -> list[int] | None:
@@ -90,6 +90,7 @@ class S2SConfig:
             ...     chunk_size_audio_secs=1.0,
             ...     source_language="en",
             ...     target_language="de",
+            ...     voice_name=None,
             ...     elevenlabs_num_speakers=0,
             ...     elevenlabs_drop_background_audio=False,
             ...     elevenlabs_use_profanity_filter=False,
@@ -102,7 +103,7 @@ class S2SConfig:
             ... )
             >>> config = S2SConfig.from_args(args)
             >>> config.target_language
-            'es'
+            'de'
         """
         return cls(
             s2s_server=args.s2s_server,
@@ -111,7 +112,7 @@ class S2SConfig:
             chunk_size_audio_secs=args.chunk_size_audio_secs,
             source_language=args.source_language,
             target_language=args.target_language,
-            voice_name=getattr(args, "voice_name", None),
+            voice_name=args.voice_name,
             elevenlabs_num_speakers=getattr(args, "elevenlabs_num_speakers", 0),
             elevenlabs_drop_background_audio=getattr(
                 args, "elevenlabs_drop_background_audio", False
@@ -184,9 +185,7 @@ class S2SConfig:
                 "Only WAV and MP3 formats are supported."
             )
 
-        output_dir = os.path.dirname(self.output_audio)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+        ensure_parent_dir(path=self.output_audio)
 
         if not self.source_language:
             raise RuntimeError("Source language must not be empty.")

@@ -5,9 +5,18 @@
 
 echo "Starting Controller Service..."
 
-# Check if debug mode is enabled via log level
+# Opt-in remote debugging: debugpy is not shipped in the production image,
+# so install it at container start only when CONTROLLER_VS_CODE_DEBUG=1
+# (requires network access; pinned for reproducibility). Publish the debug
+# port with docker-compose.debug.yml when using this mode.
 if [ "${CONTROLLER_VS_CODE_DEBUG}" = 1 ]; then
     echo "Starting in DEBUG mode with debugpy."
+    if ! python -c "import debugpy" 2>/dev/null; then
+        echo "Installing debugpy for the opt-in debug workflow..."
+        # python -m pip guarantees the install targets the same interpreter
+        # that runs the service (and the import check above).
+        python -m pip install --no-cache-dir debugpy==1.8.21
+    fi
     DEBUG_CMD="python -m debugpy --listen 0.0.0.0:${CONTROLLER_DEBUG_PORT} --wait-for-client"
 else
     DEBUG_CMD="python"

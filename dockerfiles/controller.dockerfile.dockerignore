@@ -1,0 +1,25 @@
+# BuildKit per-Dockerfile ignore for controller.dockerfile: replaces the root
+# .dockerignore for this build. Mirrors the root list and additionally
+# excludes the ~200MB assets/ tree, which only the demo-app image needs.
+.*
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+assets
+build
+dataset
+dist
+docs*
+experiments*
+*_test
+logs
+node_modules
+outputs
+volumes/profiler/*.*
+protos/generated
+security
+tests
+uml
+volumes
+client/demos

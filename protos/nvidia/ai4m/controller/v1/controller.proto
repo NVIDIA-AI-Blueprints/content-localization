@@ -7,68 +7,88 @@ syntax = "proto3";
 
 package nvidia.ai4m.controller.v1;
 
+import "google/protobuf/empty.proto";
 import "nvidia/ai4m/activespeakerdetection/v1/activespeakerdetection.proto";
+import "nvidia/ai4m/audio/v1/audio.proto";
 import "nvidia/ai4m/lipsync/v1/lipsync.proto";
 import "nvidia/ai4m/s2s/v1/s2s.proto";
-import "google/protobuf/empty.proto";
 
 // Content Localization service definition
 service ContentLocalizationController {
   // Bidirectional streaming RPC for content localization
-  rpc StreamContentLocalization(stream ContentLocalizationRequest) returns (stream ContentLocalizationResponse) {}
+  rpc StreamContentLocalization(stream ContentLocalizationRequest)
+      returns (stream ContentLocalizationResponse) {}
 }
-
-// TODO: Need to add configuration RPCs and messages for setting up speaker portrait etc.
 
 // Controller-level configuration sent once at the start of the request stream
 message ContentLocalizationConfig {
-  // When true, skip S2S and use translated_audio_data for LipSync input
+  // When true, skip S2S and use translated_audio_data for LipSync input.
+  // Requires at least one translated_audio_data message in the stream;
+  // conversely, translated_audio_data is rejected when this flag is false.
   bool bypass_s2s = 1;
-  // When true, skip ASD — LipSync uses internal face detection
+
+  // When true, skip ASD — LipSync uses internal face detection.
+  // When false and ASD is configured, an asd_config message is required.
   bool bypass_asd = 2;
+
+  // Properties of the original audio stream (audio_data messages).
+  // The codec declared here labels the audio sent to the S2S backend.
+  // When omitted, the input is treated as WAV.
+  nvidia.ai4m.audio.v1.AudioConfig input_audio_config = 3;
 }
 
-// Content Localization message containing audio data and metadata
+// Content localization request stream message.
+//
+// Configuration messages (controller_config, then the per-service configs)
+// are sent at the start of the stream, before any data payloads. Each
+// message carries exactly one payload; request_id may accompany any payload.
 message ContentLocalizationRequest {
-  // Raw audio data
-  optional bytes audio_data = 1;
-
-  // Raw video data
-  optional bytes video_file_data = 2;
-
-  // Request ID for tracking
+  // Client-supplied correlation id echoed in responses. The server
+  // generates an id when the client does not provide one.
   optional string request_id = 3;
 
-  // S2S config
-  optional nvidia.ai4m.s2s.v1.SpeechToSpeechConfig s2s_config = 4;
+  oneof payload {
+    // Raw audio data
+    bytes audio_data = 1;
 
-  // Diarization info for active speaker detection
-  optional nvidia.ai4m.activespeakerdetection.v1.AudioDiarizationInfo diarization_info = 5;
+    // Raw video data
+    bytes video_file_data = 2;
 
-  // ASD config for active speaker detection service
-  optional nvidia.ai4m.activespeakerdetection.v1.ActiveSpeakerDetectionConfig asd_config = 6;
+    // S2S config
+    nvidia.ai4m.s2s.v1.SpeechToSpeechConfig s2s_config = 4;
 
-  // LipSync config for lip sync service
-  optional nvidia.ai4m.lipsync.v1.LipsyncConfig lipsync_config = 7;
+    // Diarization info for active speaker detection
+    nvidia.ai4m.activespeakerdetection.v1.AudioDiarizationInfo diarization_info = 5;
 
-  // Background audio data bytes for LipSync background audio mixing
-  optional bytes background_audio_data = 8;
+    // ASD config for active speaker detection service
+    nvidia.ai4m.activespeakerdetection.v1.ActiveSpeakerDetectionConfig asd_config = 6;
 
-  // Pre-translated audio that bypasses S2S (per-request no-S2S mode)
-  optional bytes translated_audio_data = 9;
+    // LipSync config for lip sync service
+    nvidia.ai4m.lipsync.v1.LipsyncConfig lipsync_config = 7;
 
-  // Controller-level config (bypass_s2s, etc.)
-  optional ContentLocalizationConfig controller_config = 10;
+    // Background audio data bytes for LipSync background audio mixing
+    bytes background_audio_data = 8;
+
+    // Pre-translated audio consumed instead of S2S output. Only valid when
+    // controller_config.bypass_s2s is true.
+    bytes translated_audio_data = 9;
+
+    // Controller-level config (bypass flags, input audio properties)
+    ContentLocalizationConfig controller_config = 10;
+  }
 }
 
-// Content Localization message containing processed video data
+// Content localization response stream message.
 message ContentLocalizationResponse {
-  // Processed video data from LipSync service
-  optional bytes video_file_data = 1;
-
-  // Request ID for tracking
+  // Correlation id: the client-supplied request_id when one was provided,
+  // otherwise a server-generated id.
   optional string request_id = 2;
 
-  // Empty message used to maintain connection
-  google.protobuf.Empty keepalive = 3;
+  oneof payload {
+    // Processed video data from LipSync service
+    bytes video_file_data = 1;
+
+    // Empty message used to maintain connection
+    google.protobuf.Empty keepalive = 3;
+  }
 }

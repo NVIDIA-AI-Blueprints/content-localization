@@ -17,7 +17,7 @@ from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncConfig
 from nvidia.ai4m.video.v1.video_pb2 import LossyEncoding
 from nvidia.ai4m.video.v1.video_pb2 import VideoEncoding
 
-from client.lipsync.constants import AUDIO_CODEC_CONFIGS
+from client.common.audio import AUDIO_CODEC_CONFIGS
 from client.lipsync.constants import DEFAULT_AUDIO_PATH
 from client.lipsync.constants import DEFAULT_BITRATE_MBPS
 from client.lipsync.constants import DEFAULT_IDR_INTERVAL
@@ -48,9 +48,9 @@ def add_lipsync_config_args_to_parser(
     parser.add_argument(
         "--lipsync-input-audio-codec",
         type=str,
-        default="MP3",
+        default=None,
         choices=["WAV", "MP3"],
-        help="Audio codec for LipSync input (default: MP3)",
+        help="Audio codec for LipSync input. Omit to auto-detect for file input.",
     )
     parser.add_argument(
         "--lipsync-extend-audio",
@@ -183,7 +183,7 @@ def lipsync_config_from_args(args: argparse.Namespace) -> LipsyncConfig:
 
     Examples:
         >>> args = argparse.Namespace(
-        ...     lipsync_input_audio_codec="MP3",
+        ...     lipsync_input_audio_codec=None,
         ...     lipsync_extend_audio="unspecified",
         ...     lipsync_extend_video="unspecified",
         ...     lipsync_output_bitrate_mbps=20,
@@ -197,8 +197,9 @@ def lipsync_config_from_args(args: argparse.Namespace) -> LipsyncConfig:
         >>> cfg = lipsync_config_from_args(args)
     """
     output_video_encoding = _build_video_encoding(args)
+    input_audio_codec = getattr(args, "lipsync_input_audio_codec", None) or "MP3"
     config = LipsyncConfig(
-        input_audio_codec=AUDIO_CODEC_CONFIGS[args.lipsync_input_audio_codec.lower()],
+        input_audio_codec=AUDIO_CODEC_CONFIGS[input_audio_codec.lower()],
         extend_audio=EXTEND_AUDIO_CONFIGS[args.lipsync_extend_audio],
         extend_video=EXTEND_VIDEO_CONFIGS[args.lipsync_extend_video],
         output_video_encoding=output_video_encoding,
@@ -268,8 +269,24 @@ def _build_background_audio_config(
 def argsfactory(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
     """Create and configure argument parser.
 
+    The I/O flags are aligned with the other clients
+    (``--lipsync-server``, ``--input-mp4``, ``--input-audio``,
+    ``--output-mp4``); the original flag names (``--target``,
+    ``--video-input``, ``--audio-input``, ``--output``) remain available
+    as deprecated aliases.
+
+    Args:
+        parser (argparse.ArgumentParser | None): Existing parser to
+            extend. Creates a new one if ``None``.
+
     Returns:
-        Configured ArgumentParser instance
+        argparse.ArgumentParser: Configured parser instance.
+
+    Examples:
+        >>> parser = argsfactory()
+        >>> args = parser.parse_args(["--lipsync-server", "localhost:50054"])
+        >>> args.lipsync_server
+        'localhost:50054'
     """
 
     class SmartFormatter(
@@ -310,24 +327,30 @@ def argsfactory(parser: argparse.ArgumentParser | None = None) -> argparse.Argum
         help="Path to SSL root certificate",
     )
     parser.add_argument(
+        "--lipsync-server",
         "--target",
+        dest="lipsync_server",
         type=str,
         default="127.0.0.1:50054",
-        help="IP:port of gRPC service",
+        help="IP:port of the LipSync gRPC service (--target is a deprecated alias)",
     )
 
     # Input file arguments
     parser.add_argument(
+        "--input-mp4",
         "--video-input",
+        dest="input_mp4",
         type=str,
         default=DEFAULT_VIDEO_PATH,
-        help="Path to the input video file",
+        help="Path to the input video file (--video-input is a deprecated alias)",
     )
     parser.add_argument(
+        "--input-audio",
         "--audio-input",
+        dest="input_audio",
         type=str,
         default=DEFAULT_AUDIO_PATH,
-        help="Path to the input audio file",
+        help="Path to the input audio file (--audio-input is a deprecated alias)",
     )
     parser.add_argument(
         "--speaker-info-input",
@@ -348,10 +371,12 @@ def argsfactory(parser: argparse.ArgumentParser | None = None) -> argparse.Argum
 
     # Output arguments
     parser.add_argument(
+        "--output-mp4",
         "--output",
+        dest="output_mp4",
         type=str,
         default="outputs/lipsync_output.mp4",
-        help="Path for the output video file",
+        help="Path for the output video file (--output is a deprecated alias)",
     )
 
     return parser

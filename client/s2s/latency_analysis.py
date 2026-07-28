@@ -3,9 +3,108 @@
 
 """Latency analysis functions for S2S client."""
 
-import os
+import json
 
 import matplotlib.pyplot as plt
+
+from client.common.paths import ensure_parent_dir
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Return the *pct* percentile of *values* via linear interpolation.
+
+    Args:
+        values (list[float]): Numeric samples (need not be sorted).
+        pct (float): Percentile in the range ``[0, 100]``.
+
+    Returns:
+        float: The interpolated percentile, or ``0.0`` for empty input.
+
+    Raises:
+        ValueError: If *pct* is outside the ``[0, 100]`` range.
+
+    Examples:
+        >>> _percentile([1.0, 2.0, 3.0, 4.0], 50.0)
+        2.5
+    """
+    # Validate the requested percentile before the empty-input short-circuit
+    # so a bad pct is always surfaced, regardless of the sample count.
+    if pct < 0.0 or pct > 100.0:
+        raise ValueError(f"pct must be in [0, 100], got {pct}")
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (pct / 100.0) * (len(ordered) - 1)
+    low = int(rank)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (ordered[high] - ordered[low]) * (rank - low)
+
+
+def write_latency_json(
+    per_chunk_latencies: list[float],
+    output_stream_latencies: list[float],
+    chunk_size_secs: float,
+    is_realtime: bool,
+    output_path: str,
+    asset: str | None = None,
+    duration_secs: float | None = None,
+    wall_time_secs: float | None = None,
+) -> dict[str, object]:
+    """Write a machine-readable S2S latency summary to JSON.
+
+    Aggregates the per-chunk and output-stream latency lists into mean
+    and p95 statistics and persists them alongside run metadata so a
+    downstream aggregator can ingest the numbers without scraping logs.
+
+    Args:
+        per_chunk_latencies (list[float]): Input-to-output latency per chunk.
+        output_stream_latencies (list[float]): Gap between consecutive
+            output chunks (the real-time-relevant series).
+        chunk_size_secs (float): Streaming chunk size in seconds.
+        is_realtime (bool): Whether every output-stream gap stayed under
+            ``chunk_size_secs``.
+        output_path (str): Destination JSON path.
+        asset (str | None): Input asset label (e.g. file path).
+        duration_secs (float | None): Input audio duration in seconds.
+        wall_time_secs (float | None): Total streaming wall-clock time.
+
+    Returns:
+        dict: The summary that was written to disk.
+
+    Examples:
+        >>> summary = write_latency_json(
+        ...     per_chunk_latencies=[0.5, 0.6],
+        ...     output_stream_latencies=[0.9],
+        ...     chunk_size_secs=1.0,
+        ...     is_realtime=True,
+        ...     output_path="outputs/s2s_latency.json",
+        ... )  # doctest: +SKIP
+    """
+    summary = {
+        "asset": asset,
+        "duration_secs": duration_secs,
+        "chunk_size_secs": chunk_size_secs,
+        "wall_time_secs": wall_time_secs,
+        "num_chunks": len(per_chunk_latencies),
+        "mean_per_chunk_latency": (
+            sum(per_chunk_latencies) / len(per_chunk_latencies) if per_chunk_latencies else 0.0
+        ),
+        "p95_per_chunk_latency": _percentile(values=per_chunk_latencies, pct=95.0),
+        "mean_output_stream_latency": (
+            sum(output_stream_latencies) / len(output_stream_latencies)
+            if output_stream_latencies
+            else 0.0
+        ),
+        "p95_output_stream_latency": _percentile(values=output_stream_latencies, pct=95.0),
+        "is_realtime": is_realtime,
+    }
+
+    ensure_parent_dir(path=output_path)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    return summary
 
 
 def calculate_per_chunk_latencies(input_ledger: dict, output_ledger: dict) -> list:
@@ -120,7 +219,7 @@ def plot_latency(
     ax1.grid(True, alpha=0.3)
 
     # Create output directory if it doesn't exist
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    ensure_parent_dir(path=output_path)
 
     # Save plot
     plt.savefig(output_path, dpi=300, bbox_inches="tight")

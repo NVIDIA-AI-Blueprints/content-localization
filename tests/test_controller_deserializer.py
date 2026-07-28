@@ -4,7 +4,9 @@
 """Unit tests for ContentLocalizationDeserializer."""
 
 import unittest
+from unittest.mock import patch
 
+import pytest
 from nvidia.ai4m.activespeakerdetection.v1.activespeakerdetection_pb2 import (
     ActiveSpeakerDetectionConfig,
 )
@@ -21,6 +23,8 @@ from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
 from common.buffers import RequestIteratorFromBuffer
 from controller_service.deserializer import ContentLocalizationDeserializer
 
+pytestmark = pytest.mark.unit
+
 
 def _audio_request(audio_bytes: bytes = b"\x00") -> ContentLocalizationRequest:
     """Create a request with audio data."""
@@ -32,10 +36,10 @@ def _video_request(video_bytes: bytes = b"\x01") -> ContentLocalizationRequest:
     return ContentLocalizationRequest(video_file_data=video_bytes)
 
 
-def _mixed_request(
+def _request_with_two_payload_fields(
     audio_bytes: bytes = b"\x00", video_bytes: bytes = b"\x01"
 ) -> ContentLocalizationRequest:
-    """Create a request with both audio and video data."""
+    """Create a request setting two payload fields; the oneof keeps the last."""
     return ContentLocalizationRequest(audio_data=audio_bytes, video_file_data=video_bytes)
 
 
@@ -106,12 +110,12 @@ class TestContentLocalizationDeserializer(unittest.TestCase):
         self.assertEqual(ds.video_buffer.qsize(0), 1)
         self.assertEqual(ds.video_buffer.qsize(1), 1)
 
-    def test_mixed_request_routes_to_both_buffers(self) -> None:
-        """A request with both audio and video goes to both buffers."""
-        ds = self._run_deserializer([_mixed_request(b"a", b"v")])
+    def test_payload_oneof_keeps_only_the_last_field_set(self) -> None:
+        """Each request carries exactly one payload; the last field set wins."""
+        ds = self._run_deserializer([_request_with_two_payload_fields(b"a", b"v")])
 
-        self.assertEqual(ds.audio_buffer.qsize(0), 1)
-        self.assertEqual(ds.audio_buffer.qsize(1), 1)
+        self.assertEqual(ds.audio_buffer.qsize(0), 0)
+        self.assertEqual(ds.audio_buffer.qsize(1), 0)
         self.assertEqual(ds.video_buffer.qsize(0), 1)
         self.assertEqual(ds.video_buffer.qsize(1), 1)
 
@@ -200,23 +204,23 @@ class TestContentLocalizationDeserializer(unittest.TestCase):
         self.assertEqual(c0_item.audio_data, c1_item.audio_data)
         self.assertIsNot(c0_item, c1_item)
 
-    def test_multiple_mixed_requests(self) -> None:
-        """Realistic stream with mixed, audio-only, and video-only requests."""
+    def test_multiple_payload_requests(self) -> None:
+        """Realistic stream with config, audio, and video messages."""
         requests = [
             _config_request(),  # s2s_config_buffer
             _audio_request(b"a1"),  # audio buffer
             _video_request(b"v1"),  # video buffer
-            _mixed_request(b"a2", b"v2"),  # both
+            _video_request(b"v2"),  # video buffer
             _audio_request(b"a3"),  # audio buffer
         ]
         ds = self._run_deserializer(requests)
 
-        # audio_buffer: a1, mixed(a2), a3 = 3 items per consumer
-        self.assertEqual(ds.audio_buffer.qsize(0), 3)
-        self.assertEqual(ds.audio_buffer.qsize(1), 3)
+        # audio_buffer: a1, a3 = 2 items per consumer
+        self.assertEqual(ds.audio_buffer.qsize(0), 2)
+        self.assertEqual(ds.audio_buffer.qsize(1), 2)
         # s2s_config_buffer: config only
         self.assertEqual(ds.s2s_config_buffer.qsize(0), 1)
-        # video_buffer: v1, mixed(v2) = 2 items per consumer
+        # video_buffer: v1, v2 = 2 items per consumer
         self.assertEqual(ds.video_buffer.qsize(0), 2)
         self.assertEqual(ds.video_buffer.qsize(1), 2)
 
@@ -436,3 +440,31 @@ class TestContentLocalizationDeserializer(unittest.TestCase):
         self.assertEqual(ds.translated_audio_buffer.qsize(0), 2)
         # S2S config buffer should be empty in bypass mode
         self.assertTrue(ds.s2s_config_buffer.empty(0))
+
+    # -- request id handling ------------------------------------------------
+
+    def test_first_request_id_wins(self) -> None:
+        """The first client-supplied request_id is kept for the whole stream."""
+        requests = [
+            ContentLocalizationRequest(request_id="first", audio_data=b"a1"),
+            ContentLocalizationRequest(request_id="first", audio_data=b"a2"),
+        ]
+        ds = self._run_deserializer(requests)
+
+        self.assertEqual(ds.client_request_id, "first")
+
+    def test_conflicting_late_request_id_warns_once(self) -> None:
+        """A differing mid-stream request_id is ignored with a single warning."""
+        requests = [
+            ContentLocalizationRequest(request_id="first", audio_data=b"a1"),
+            ContentLocalizationRequest(request_id="second", audio_data=b"a2"),
+            ContentLocalizationRequest(request_id="second", audio_data=b"a3"),
+        ]
+        with patch("controller_service.deserializer.logger") as mock_logger:
+            ds = self._run_deserializer(requests)
+
+        self.assertEqual(ds.client_request_id, "first")
+        warnings = [str(call.args[0]) for call in mock_logger.warning.call_args_list]
+        id_warnings = [msg for msg in warnings if "'second'" in msg]
+        self.assertEqual(len(id_warnings), 1)
+        self.assertIn("'first'", id_warnings[0])

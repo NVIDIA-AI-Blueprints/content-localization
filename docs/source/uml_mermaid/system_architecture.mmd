@@ -17,8 +17,8 @@ flowchart TB
     end
 
     subgraph externalServices [ExternalServices]
-        rivaServices[RivaServices]
         elevenLabs[ElevenLabs]
+        cambAi[CambAI]
     end
 
     controllerClient --> controllerService
@@ -34,5 +34,5 @@ flowchart TB
     controllerService --> asdService
     controllerService --> lipService
 
-    s2sService --> rivaServices
     s2sService --> elevenLabs
+    s2sService --> cambAi

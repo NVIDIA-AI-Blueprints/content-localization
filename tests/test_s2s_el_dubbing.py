@@ -13,9 +13,12 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechRequest
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechResponse
+
+pytestmark = pytest.mark.unit
 
 
 class DummyContext:

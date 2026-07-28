@@ -4,48 +4,59 @@
 client package
 ==============
 
-Client applications and shared utilities for interacting
-with the Content Localization services.
+Client applications for interacting with the Content Localization
+services. Shared client helpers (``common.health``, ``common.tls``,
+``common.media``, ``common.proto_utils``, ``common.context``,
+``common.source_sink``) live in the :ref:`common package <api_common>`.
 
-client.utils
--------------
+client.common.audio
+-------------------
 
-.. automodule:: client.utils
+.. automodule:: client.common.audio
    :members:
    :show-inheritance:
 
-client.context
---------------
+client.common.bypass
+--------------------
 
-.. automodule:: client.context
+.. automodule:: client.common.bypass
    :members:
    :show-inheritance:
 
-client.source_simulators.base
------------------------------
+client.common.diarization
+-------------------------
 
-.. automodule:: client.source_simulators.base
+.. automodule:: client.common.diarization
    :members:
    :show-inheritance:
 
-client.source_simulators.audio
-------------------------------
+client.common.paths
+-------------------
 
-.. automodule:: client.source_simulators.audio
+.. automodule:: client.common.paths
    :members:
    :show-inheritance:
 
-client.source_simulators.file
------------------------------
+client.common.timing
+--------------------
 
-.. automodule:: client.source_simulators.file
+.. automodule:: client.common.timing
    :members:
+   :no-index:
    :show-inheritance:
 
-client.source_simulators.video
-------------------------------
+client.common.worker
+--------------------
 
-.. automodule:: client.source_simulators.video
+.. automodule:: client.common.worker
+   :members:
+   :no-index:
+   :show-inheritance:
+
+client.diarization_args
+-----------------------
+
+.. automodule:: client.diarization_args
    :members:
    :show-inheritance:
 
@@ -135,6 +146,20 @@ client.s2s.args
    :members:
    :show-inheritance:
 
+client.s2s.camb_args
+--------------------
+
+.. automodule:: client.s2s.camb_args
+   :members:
+   :show-inheritance:
+
+client.s2s.elevenlabs_args
+--------------------------
+
+.. automodule:: client.s2s.elevenlabs_args
+   :members:
+   :show-inheritance:
+
 client.s2s.config
 -----------------
 
@@ -177,13 +202,6 @@ client.asd.config
 .. automodule:: client.asd.config
    :members:
    :no-index:
-   :show-inheritance:
-
-client.asd.diarization
------------------------
-
-.. automodule:: client.asd.diarization
-   :members:
    :show-inheritance:
 
 client.asd.request_generators
@@ -291,18 +309,4 @@ client.batch_processing.report
 .. automodule:: client.batch_processing.report
    :members:
    :no-index:
-   :show-inheritance:
-
-client.utilities.plot_metrics
------------------------------
-
-.. automodule:: client.utilities.plot_metrics
-   :members:
-   :show-inheritance:
-
-client.utilities.pstats_to_trace
----------------------------------
-
-.. automodule:: client.utilities.pstats_to_trace
-   :members:
    :show-inheritance:

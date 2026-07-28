@@ -32,7 +32,7 @@ Cannot Connect to a Service
 
    .. code-block:: python
 
-       from utils import check_service_health
+       from common.health import check_service_health
 
        # Test connection
        is_healthy = check_service_health("localhost:50050")
@@ -56,8 +56,7 @@ Unsupported Audio Format
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 - Only WAV and MP3 audio formats are supported
-- RIVA only supports WAV audio format for input and output. Refer to RIVA docs for more details.
-- 11labs requires a mp3 audio file for output.
+- ElevenLabs produces MP3 output by default.
 - File validation failures
 
 **Solutions**:
@@ -117,8 +116,10 @@ Non-Streamable Video
 ~~~~~~~~~~~~~~~~~~~~
 
 **Symptoms**:
-- "Video file is not streamable" error
-- Streaming mode failures
+
+- ``Video streamable: False`` in client DEBUG logs (no error is raised)
+- Higher memory usage and delayed inference start; non-streamable MP4
+  files are still accepted
 
 **Solutions**:
 
@@ -127,13 +128,13 @@ Non-Streamable Video
    .. code-block:: bash
 
        # Make video streamable using helper script
-       ./scripts/convert_to_streamable_mp4.sh input.mp4
+       ./scripts/misc/convert_to_streamable_mp4.sh input.mp4
 
 2. **Check streamability**:
 
    .. code-block:: python
 
-       from utils import check_streamable
+       from common.media import check_streamable
 
        is_streamable = check_streamable("input.mp4")
        print(f"Video is streamable: {is_streamable}")
@@ -161,32 +162,17 @@ High Latency
         # Use smaller video chunks
         python client/controller/app.py --chunk-size-video-bytes 32768
 
-2. **Monitor latency**:
-
-    .. code-block:: python
-
-        from latency_analysis import calculate_per_chunk_latencies
-        
-        # Calculate and analyze latencies
-        latencies = calculate_per_chunk_latencies(
-            input_ledger=source.ledger,
-            output_ledger=sink.ledger
-        )
-        
-        avg_latency = sum(latencies) / len(latencies)
-        print(f"Average latency: {avg_latency:.3f}s")
-
-3. **Check network conditions**:
+2. **Check network conditions**:
    - Ensure low network latency
    - Use local services when possible
    - Check bandwidth availability
 
-4. **Optimize video encoding**:
+3. **Optimize video encoding**:
 
    .. code-block:: bash
 
         # Use lower bitrate for faster processing
-        python client/lipsync/app.py --bitrate 2000000
+        python client/lipsync/app.py --lipsync-output-bitrate-mbps 2
 
 Memory Issues
 ~~~~~~~~~~~~~
@@ -271,8 +257,8 @@ Invalid Speaker Info Format
         # Check CSV format
         head -5 speaker_info.csv
         
-        # Verify column structure
-        # Expected: bbox_x,bbox_y,bbox_w,bbox_h
+        # Verify column structure. Expected header:
+        # frame_id,x,y,width,height,diarized_speaker_id,face_id,is_speaking,face_detection_confidence
 
 2. **Validate speaker info coordinates**:
    - Ensure coordinates are within video dimensions
@@ -288,10 +274,14 @@ Invalid Speaker Info Format
         # Create sample speaker info file
         with open('sample_speaker_info.csv', 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['bbox_x', 'bbox_y', 'bbox_w', 'bbox_h'])
-            # Add speaker info entries for each frame
+            writer.writerow([
+                'frame_id', 'x', 'y', 'width', 'height',
+                'diarized_speaker_id', 'face_id', 'is_speaking',
+                'face_detection_confidence',
+            ])
+            # Add one row per video frame
             for frame in range(100):
-                writer.writerow([100, 100, 200, 200])  # Example coordinates
+                writer.writerow([frame, 100, 100, 200, 200, 0, 0, True, 0.99])
 
 SSL/TLS Issues
 --------------
@@ -317,20 +307,18 @@ SSL Certificate Errors
     .. code-block:: bash
 
         # Verify certificate files exist
-        ls -la ssl_key/
-        
+        ls -la certs/
+
         # Check certificate validity
-        openssl x509 -in ssl_key/ssl_cert_client.pem -text -noout
+        openssl x509 -in certs/client.pem -text -noout
 
 3. **Generate self-signed certificates** (for testing):
 
     .. code-block:: bash
 
-        # Generate CA certificate
-        openssl req -x509 -newkey rsa:4096 -keyout ca_key.pem -out ca_cert.pem -days 365
-        
-        # Generate client certificate
-        openssl req -newkey rsa:4096 -keyout client_key.pem -out client_cert.pem
+        # Generates a dev CA plus per-service server certs and an mTLS
+        # client cert into ./certs (development/testing only)
+        bash scripts/misc/generate_dev_certs.sh
 
 Python Environment Issues
 -------------------------
@@ -359,7 +347,7 @@ Import Errors
     .. code-block:: bash
 
         # Install project dependencies
-        uv pip install -r pyproject.toml --extra test --extra lint --extra docs
+        uv sync --extra test --extra lint --extra docs
 
 3. **Check Python version**:
 
@@ -379,7 +367,7 @@ Import Errors
         source .venv/bin/activate
 
         # Install dependencies
-        uv pip install -r pyproject.toml --extra test --extra lint --extra docs
+        uv sync --extra test --extra lint --extra docs
 
 gRPC Issues
 -----------
@@ -397,12 +385,8 @@ gRPC Version Conflicts
 
     .. code-block:: bash
 
-        # Regenerate from proto files
-        python -m grpc_tools.protoc \
-            --python_out=protos/generated \
-            --grpc_python_out=protos/generated \
-            --proto_path=protos \
-            protos/nvidia/ai4m/s2s/v1/s2s.proto
+        # Regenerate all protobuf files with the canonical script
+        bash protos/generate_protos.sh
 
 2. **Check protobuf version**:
 
@@ -432,7 +416,8 @@ Common Error Messages
 
 **Unsupported format**: Wrong file format - Convert to supported format
 
-**Not streamable**: Video not streamable - Convert with movflags +faststart
+**Video streamable: False**: DEBUG log, not an error - Convert with movflags +faststart
+for better performance
 
 **gRPC timeout**: Network/service issues - Check network, increase timeout
 

@@ -4,8 +4,12 @@
 
 import unittest
 
+import pytest
+
 from s2s_service.segmentizer import length_segmentizer
 from s2s_service.segmentizer import sentence_segmentizer
+
+pytestmark = pytest.mark.unit
 
 
 class TestSentenceSegmentizer(unittest.TestCase):

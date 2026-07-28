@@ -10,24 +10,32 @@ from collections.abc import Iterator
 from nvidia.ai4m.lipsync.v1 import lipsync_pb2
 
 from client.lipsync.config import LipSyncConfig
+from common.base_utils import logger
 
 
 def write_output_file_from_response(
     response_iter: Iterator[lipsync_pb2.LipsyncResponse],
     output_filepath: os.PathLike,
-) -> None:
+) -> int:
     """Write the video data from LipsyncResponse messages to an output file.
+
+    Responses without ``video_file_data`` (e.g. acknowledgments) are
+    skipped by field inspection, so the very first video chunk is never
+    dropped.
 
     Args:
         response_iter (Iterator[lipsync_pb2.LipsyncResponse]): Iterator of
             LipsyncResponse messages from the LipSync service.
         output_filepath (os.PathLike): Path where the output video will be saved.
 
+    Returns:
+        int: Number of video chunks written.
+
     Raises:
         RuntimeError: If there are errors writing the output file.
 
     Examples:
-        >>> write_output_file_from_response(
+        >>> chunks = write_output_file_from_response(
         ...     response_iter=responses,
         ...     output_filepath="/tmp/output.mp4",
         ... )  # doctest: +SKIP
@@ -38,12 +46,13 @@ def write_output_file_from_response(
             for response in response_iter:
                 if response.HasField("video_file_data"):
                     if chunk_number == 0:
-                        print(f"Writing output file {output_filepath}")
+                        logger.info(f"Writing output file {output_filepath}")
                     chunk_number += 1
                     fd.write(response.video_file_data)
-        print(f"Output file written successfully: {output_filepath} ({chunk_number} chunks)")
+        logger.info(f"Output file written successfully: {output_filepath} ({chunk_number} chunks)")
+        return chunk_number
     except OSError as e:
-        raise RuntimeError(f"Error writing output file: {e}")
+        raise RuntimeError(f"Error writing output file: {e}") from e
 
 
 def process_response_iter(
@@ -58,6 +67,7 @@ def process_response_iter(
         lipsync_config (LipSyncConfig): Configuration for the LipSync service.
 
     Raises:
+        RuntimeError: If no video data is received from the service.
         Exception: If any errors occur during processing.
 
     Examples:
@@ -69,20 +79,16 @@ def process_response_iter(
     try:
         start_time = time.time()
 
-        # Skip first response (usually configuration acknowledgment)
-        first_response = next(response_iter, None)
-        if first_response is None:
-            raise RuntimeError("No responses received from LipSync service")
-
-        # Process video data
-        write_output_file_from_response(
+        chunk_count = write_output_file_from_response(
             response_iter=response_iter,
             output_filepath=lipsync_config.output_filepath,
         )
+        if chunk_count == 0:
+            raise RuntimeError("No video data received from LipSync service")
 
         end_time = time.time()
-        print(f"Function invocation completed in {end_time - start_time:.2f}s")
+        logger.info(f"Function invocation completed in {end_time - start_time:.2f}s")
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    except Exception:
+        logger.exception("An error occurred while processing LipSync responses")
         raise

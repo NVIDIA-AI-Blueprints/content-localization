@@ -3,23 +3,46 @@
 
 """LipSync request stream generators for the standalone LipSync client."""
 
-import argparse
 import csv
+import itertools
 from collections.abc import Iterator
-from contextlib import nullcontext
 
 from nvidia.ai4m.common.v1.common_pb2 import BoundingBox
 from nvidia.ai4m.lipsync.v1 import lipsync_pb2
 
-from client.lipsync.args import _build_background_audio_config
+from client.common.audio import DATA_CHUNK_SIZE
 from client.lipsync.config import LipSyncConfig
-from client.lipsync.constants import AUDIO_CODEC_CONFIGS
-from client.lipsync.constants import DATA_CHUNK_SIZE
-from client.lipsync.constants import EXTEND_AUDIO_CONFIGS
-from client.lipsync.constants import EXTEND_VIDEO_CONFIGS
 from client.lipsync.constants import SPEAKER_INFO_FRAME_COUNT
-from client.lipsync.encoding import create_output_video_encoding
-from client.utils import speaker_info_csv_reader
+from common.base_utils import logger
+from common.feeder_stream import FeederSource
+from common.feeder_stream import FeederStream
+
+
+def speaker_info_csv_reader(
+    reader: Iterator[list[str]],
+    row_count: int,
+) -> Iterator[list[list[str]]]:
+    """Read CSV data in batches of multiple rows.
+
+    Args:
+        reader (Iterator[list[str]]): CSV reader object to read from.
+        row_count (int): Number of rows to include in each batch.
+
+    Yields:
+        list[list[str]]: CSV rows in batches of the specified row count.
+
+    Examples:
+        >>> import csv
+        >>> import io
+        >>> rows = csv.reader(io.StringIO("a,b\\nc,d\\ne,f\\n"))
+        >>> next(speaker_info_csv_reader(reader=rows, row_count=2))
+        [['a', 'b'], ['c', 'd']]
+    """
+    while True:
+        rows = list(itertools.islice(reader, row_count))
+        if not rows:
+            break
+        yield rows
 
 
 def _speaker_info_from_row(row: list) -> tuple[int, lipsync_pb2.SpeakerInfo]:
@@ -106,161 +129,215 @@ def group_rows_into_per_frame_infos(
     ]
 
 
+def _file_chunk_iterator(file_path: str) -> Iterator[bytes]:
+    """Yield fixed-size byte chunks from a file.
+
+    The file handle is opened lazily and closed when the iterator is
+    exhausted or garbage collected, so it is safe to hand this iterator
+    to a feeder thread.
+
+    Args:
+        file_path (str): Path to the file to stream.
+
+    Yields:
+        bytes: Chunks of up to ``DATA_CHUNK_SIZE`` bytes.
+
+    Raises:
+        RuntimeError: If the file cannot be read.
+
+    Examples:
+        >>> chunks = _file_chunk_iterator(file_path="video.mp4")  # doctest: +SKIP
+    """
+    try:
+        with open(file_path, "rb") as f:
+            while True:
+                data = f.read(DATA_CHUNK_SIZE)
+                if not data:
+                    break
+                yield data
+    except OSError as e:
+        raise RuntimeError(f"Failed to read {file_path}: {e}") from e
+
+
+def _speaker_info_batch_iterator(
+    file_path: str,
+) -> Iterator[list[lipsync_pb2.SpeakerInfoPerFrame]]:
+    """Yield per-frame speaker-info batches from an ASD CSV file.
+
+    Args:
+        file_path (str): Path to the speaker-info CSV (with header row).
+
+    Yields:
+        list[lipsync_pb2.SpeakerInfoPerFrame]: Batches of grouped
+            per-frame speaker infos.
+
+    Raises:
+        RuntimeError: If the CSV cannot be read or parsed.
+
+    Examples:
+        >>> batches = _speaker_info_batch_iterator(
+        ...     file_path="speaker_info.csv",
+        ... )  # doctest: +SKIP
+    """
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            reader = csv.reader(f)
+            # Skip the header row; an empty file simply yields no batches
+            # (a bare next() would surface as "generator raised StopIteration").
+            if next(reader, None) is None:
+                return
+            for rows in speaker_info_csv_reader(
+                reader=reader,
+                row_count=SPEAKER_INFO_FRAME_COUNT,
+            ):
+                yield group_rows_into_per_frame_infos(rows)
+    except OSError as e:
+        raise RuntimeError(f"Failed to read speaker info file {file_path}: {e}") from e
+    except (ValueError, IndexError) as e:
+        raise RuntimeError(f"Failed to process speaker info data: {e}") from e
+
+
+def _build_feeder_sources(
+    lipsync_config: LipSyncConfig,
+    audio_iterator: Iterator[bytes],
+) -> list[FeederSource]:
+    """Create one feeder source per input stream for the LipSync request.
+
+    Args:
+        lipsync_config (LipSyncConfig): Validated configuration with the
+            input file paths.
+        audio_iterator (Iterator[bytes]): Chunk iterator for the input
+            audio file. Passed in (rather than built here) so the caller
+            can send a priming chunk before the feeder threads start.
+
+    Returns:
+        list[FeederSource]: Video and audio sources, plus speaker-info
+            and background-audio sources when the corresponding files
+            are configured.
+
+    Examples:
+        >>> sources = _build_feeder_sources(
+        ...     lipsync_config=cfg,
+        ...     audio_iterator=iter([b"chunk"]),
+        ... )  # doctest: +SKIP
+    """
+    sources: list[FeederSource] = [
+        FeederSource(
+            name="video",
+            iterator=_file_chunk_iterator(file_path=lipsync_config.video_filepath),
+            transform=lambda c: lipsync_pb2.LipsyncRequest(
+                input=lipsync_pb2.LipsyncInputData(video_file_data=c),
+            ),
+        ),
+        FeederSource(
+            name="audio",
+            iterator=audio_iterator,
+            transform=lambda c: lipsync_pb2.LipsyncRequest(
+                input=lipsync_pb2.LipsyncInputData(audio_file_data=c),
+            ),
+        ),
+    ]
+    if lipsync_config.speaker_info_filepath:
+        sources.append(
+            FeederSource(
+                name="speaker_info",
+                iterator=_speaker_info_batch_iterator(
+                    file_path=lipsync_config.speaker_info_filepath,
+                ),
+                transform=lambda batch: lipsync_pb2.LipsyncRequest(
+                    input=lipsync_pb2.LipsyncInputData(per_frame_speaker_infos=batch),
+                ),
+            )
+        )
+    if lipsync_config.background_audio_filepath:
+        sources.append(
+            FeederSource(
+                name="background_audio",
+                iterator=_file_chunk_iterator(
+                    file_path=lipsync_config.background_audio_filepath,
+                ),
+                transform=lambda c: lipsync_pb2.LipsyncRequest(
+                    input=lipsync_pb2.LipsyncInputData(background_audio_file_data=c),
+                ),
+            )
+        )
+    return sources
+
+
 def generate_request_for_inference(
     lipsync_config: LipSyncConfig,
+    config_proto: lipsync_pb2.LipsyncConfig,
 ) -> Iterator[lipsync_pb2.LipsyncRequest]:
     """Generate a stream of LipsyncRequest messages for the LipSync service.
 
+    Sends the configuration message first, then a single audio priming
+    chunk so the server initializes its sample rate/resampler before any
+    video or speaker-info arrives, then concurrently merges the video,
+    audio, optional speaker-info, and optional background-audio streams
+    via :class:`~common.feeder_stream.FeederStream`, matching the
+    streaming behavior of the ASD, direct, and controller clients.
+
     Args:
-        lipsync_config (LipSyncConfig): Configuration object containing all
-            LipSync parameters.
+        lipsync_config (LipSyncConfig): Validated configuration with the
+            input file paths.
+        config_proto (lipsync_pb2.LipsyncConfig): Protobuf configuration
+            message, built via ``lipsync_config_from_args`` and updated
+            with the values resolved during validation.
 
     Yields:
-        lipsync_pb2.LipsyncRequest: Messages containing either configuration
-            or chunks of input data.
+        lipsync_pb2.LipsyncRequest: Messages containing either
+            configuration or chunks of input data.
 
     Raises:
-        RuntimeError: If there are errors reading input files.
+        RuntimeError: If an input file cannot be read.
 
     Examples:
         >>> gen = generate_request_for_inference(
         ...     lipsync_config=cfg,
+        ...     config_proto=proto,
         ... )  # doctest: +SKIP
     """
-    print("Generating request for inference")
+    logger.debug("Generating request for inference")
 
-    # Create output video encoding configuration
-    output_video_encoding = create_output_video_encoding(config=lipsync_config)
+    # Send configuration first so the service can initialize decoders
+    yield lipsync_pb2.LipsyncRequest(config=config_proto)
 
-    # Prepare configuration parameters
-    if lipsync_config.audio_codec is None:
-        raise RuntimeError("Audio codec is not set. Validate config before generating requests.")
+    logger.debug("Sending data for inference")
 
-    params = {
-        "input_audio_codec": AUDIO_CODEC_CONFIGS[lipsync_config.audio_codec],
-        "extend_audio": EXTEND_AUDIO_CONFIGS[lipsync_config.extend_audio],
-        "extend_video": EXTEND_VIDEO_CONFIGS[lipsync_config.extend_video],
-        "output_video_encoding": output_video_encoding,
-        "is_speaker_info_provided": lipsync_config.is_speaker_info_provided,
-    }
-
-    # Build BackgroundAudioConfig when a background audio file is provided
-    has_bg_audio = lipsync_config.background_audio_filepath is not None
-    if has_bg_audio:
-        # Construct a minimal namespace for _build_background_audio_config
-        bg_args = argparse.Namespace(
-            lipsync_background_audio_codec=None,
-            lipsync_background_audio_volume=None,
+    # Prime audio before the feeder threads start: the feeder merge gives
+    # no cross-source ordering, but the server needs the first audio chunk
+    # to initialize its sample rate/resampler before video/speaker-info
+    # arrives (mirrors the direct client's lipsync adapter).
+    audio_iterator = _file_chunk_iterator(file_path=lipsync_config.audio_filepath)
+    primed_audio_chunks = 0
+    try:
+        first_audio_chunk = next(audio_iterator)
+    except StopIteration:
+        logger.info("LipSync standalone | audio stream empty, no priming chunk")
+    else:
+        primed_audio_chunks = 1
+        yield lipsync_pb2.LipsyncRequest(
+            input=lipsync_pb2.LipsyncInputData(audio_file_data=first_audio_chunk),
         )
-        bg_config = _build_background_audio_config(
-            args=bg_args,
-            file_path=str(lipsync_config.background_audio_filepath),
-        )
-        params["background_audio_config"] = bg_config
+        logger.info("LipSync standalone | audio priming chunk sent")
 
-    # Send configuration
-    yield lipsync_pb2.LipsyncRequest(config=lipsync_pb2.LipsyncConfig(**params))
-
-    print("Sending data for inference")
-
-    # Initialize file handles and state
-    video_done = audio_done = False
-    speaker_info_done = lipsync_config.speaker_info_filepath is None
-    background_audio_done = not has_bg_audio
-
-    with (
-        open(lipsync_config.video_filepath, "rb") as video_file,
-        open(lipsync_config.audio_filepath, "rb") as audio_file,
-        (
-            open(lipsync_config.speaker_info_filepath)
-            if lipsync_config.speaker_info_filepath
-            else nullcontext()
-        ) as speaker_info_file,
-        (
-            open(lipsync_config.background_audio_filepath, "rb") if has_bg_audio else nullcontext()
-        ) as background_audio_file,
-    ):
-        # Set up speaker info reader if file is provided
-        speaker_info_iterator = None
-        if speaker_info_file:
-            speaker_info_reader = csv.reader(speaker_info_file)
-            next(speaker_info_reader)  # Skip header row
-            speaker_info_iterator = speaker_info_csv_reader(
-                speaker_info_reader, SPEAKER_INFO_FRAME_COUNT
-            )
-
-        # Process data chunks
-        chunk_counters = {
-            "video": 0,
-            "audio": 0,
-            "speaker_info": 0,
-            "background_audio": 0,
-        }
-
-        while not (video_done and audio_done and speaker_info_done and background_audio_done):
-            # Send video chunk if not done
-            if not video_done:
-                try:
-                    video_buffer = video_file.read(DATA_CHUNK_SIZE)
-                    if video_buffer:
-                        chunk_counters["video"] += 1
-                        yield lipsync_pb2.LipsyncRequest(
-                            input=lipsync_pb2.LipsyncInputData(video_file_data=video_buffer)
-                        )
-                    else:
-                        video_done = True
-                except OSError as e:
-                    raise RuntimeError(f"Failed to read video file: {e}")
-
-            # Send audio chunk if not done
-            if not audio_done:
-                try:
-                    audio_buffer = audio_file.read(DATA_CHUNK_SIZE)
-                    if audio_buffer:
-                        chunk_counters["audio"] += 1
-                        yield lipsync_pb2.LipsyncRequest(
-                            input=lipsync_pb2.LipsyncInputData(audio_file_data=audio_buffer)
-                        )
-                    else:
-                        audio_done = True
-                except OSError as e:
-                    raise RuntimeError(f"Failed to read audio file: {e}")
-
-            # Send speaker info batch if not done
-            if not speaker_info_done:
-                assert speaker_info_iterator is not None
-                try:
-                    rows = next(speaker_info_iterator, None)
-                    if rows is not None:
-                        chunk_counters["speaker_info"] += 1
-                        speaker_info_batch = group_rows_into_per_frame_infos(rows)
-                        yield lipsync_pb2.LipsyncRequest(
-                            input=lipsync_pb2.LipsyncInputData(
-                                per_frame_speaker_infos=speaker_info_batch
-                            )
-                        )
-                    else:
-                        speaker_info_done = True
-                except Exception as e:
-                    raise RuntimeError(f"Failed to process speaker info data: {e}")
-
-            # Send background audio chunk if not done
-            if not background_audio_done:
-                try:
-                    bg_buffer = background_audio_file.read(DATA_CHUNK_SIZE)
-                    if bg_buffer:
-                        chunk_counters["background_audio"] += 1
-                        yield lipsync_pb2.LipsyncRequest(
-                            input=lipsync_pb2.LipsyncInputData(background_audio_file_data=bg_buffer)
-                        )
-                    else:
-                        background_audio_done = True
-                except OSError as e:
-                    raise RuntimeError(f"Failed to read background audio file: {e}") from e
-
-    print(
-        f"Data sending completed - Video: {chunk_counters['video']}, "
-        f"Audio: {chunk_counters['audio']}, "
-        f"Speaker info: {chunk_counters['speaker_info']}, "
-        f"Background audio: {chunk_counters['background_audio']} chunks"
+    stream: FeederStream[lipsync_pb2.LipsyncRequest] = FeederStream(
+        sources=_build_feeder_sources(
+            lipsync_config=lipsync_config,
+            audio_iterator=audio_iterator,
+        ),
     )
+    stream.start(request_id="lipsync-standalone")
+    try:
+        yield from stream
+    finally:
+        stream.stop()
+
+    counts = stream.chunk_counts
+    logger.info(
+        f"Data sending completed - Video: {counts.get('video', 0)}, "
+        f"Audio: {counts.get('audio', 0) + primed_audio_chunks}, "
+        f"Speaker info: {counts.get('speaker_info', 0)}, "
+        f"Background audio: {counts.get('background_audio', 0)} chunks"
+    )
+    stream.raise_on_error()

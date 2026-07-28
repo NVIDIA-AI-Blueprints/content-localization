@@ -31,7 +31,7 @@ Before building the documentation, install the required dependencies:
 
 ```bash
 # Install Python development dependencies (includes Sphinx and related tools)
-uv pip install -r requirements-dev.txt
+uv sync --extra docs
 ```
 
 Install Node.js from: https://nodejs.org/en/download
@@ -47,12 +47,11 @@ This will install:
 ### Build Commands
 
 ```bash
-# Build HTML documentation
-./build_docs.sh
+# Build HTML documentation (from the repo root)
+bash docs/build_docs.sh
 
 # Build specific format
 sphinx-build -b html docs/source build/docs/html
-sphinx-build -b pdf docs/source build/docs/pdf
 sphinx-build -b epub docs/source build/docs/epub
 ```
 
@@ -61,7 +60,6 @@ sphinx-build -b epub docs/source build/docs/epub
 The built documentation will be available in:
 
 - **HTML**: `build/docs/html/index.html`
-- **PDF**: `build/docs/pdf/index.pdf`
 - **EPUB**: `build/docs/epub/index.epub`
 
 ## Documentation Features
@@ -115,7 +113,7 @@ The built documentation will be available in:
 
 1. **Speech-to-Speech (S2S) Service**
    - Audio translation and synthesis
-   - RIVA or ElevenLabs backend support
+   - ElevenLabs or CambAI backend support
    - Real-time streaming capabilities
 
 2. **Active Speaker Detection (ASD) NIM Service**
@@ -134,13 +132,13 @@ The built documentation will be available in:
 
 1. Create new `.rst` files in `docs/source/`
 2. Update `docs/source/index.rst` to include new content
-3. Rebuild documentation using `./build_docs.sh`
+3. Rebuild documentation using `bash docs/build_docs.sh` (from the repo root)
 
 ### Updating Mermaid Diagrams
 
 1. Update Mermaid blocks directly in docs pages under `docs/source/`
 2. Keep reusable Mermaid source files in `docs/source/uml_mermaid/`
-3. Rebuild documentation using `./docs/build_docs.sh`
+3. Rebuild documentation using `bash docs/build_docs.sh` (from the repo root)
 4. Verify rendered diagrams and cross-references
 
 ### Style Guidelines

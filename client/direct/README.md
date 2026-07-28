@@ -67,7 +67,7 @@ python client/direct/app.py \
 | `--lipsync-server` | `localhost:50054` | Address and port of the LipSync gRPC service |
 | `--asd-server` | `localhost:50055` | Address and port of the ASD NIM gRPC service |
 | `--input-audio` | `assets/sample_audio.wav` | Path to input audio file (WAV format) |
-| `--input-mp4` | `assets/sample_video_streamable.mp4` | Path to input video file (streamable MP4 only) |
+| `--input-mp4` | `assets/sample_video_streamable.mp4` | Path to input video file (MP4; streamable MP4 recommended) |
 | `--chunk-size-audio-secs` | `1` | Audio chunk size for streaming in seconds |
 | `--chunk-size-video-bytes` | `1048576` (1 MB) | Video chunk size for streaming in bytes |
 | `--output-mp4` | `outputs/direct_output.mp4` | Path to output video file (MP4 format) |

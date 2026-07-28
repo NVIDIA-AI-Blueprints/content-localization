@@ -14,7 +14,6 @@ Call ``validate_io()`` to verify the I/O paths when they are set.
 """
 
 import argparse
-import os
 from dataclasses import dataclass
 
 from nvidia.ai4m.activespeakerdetection.v1.activespeakerdetection_pb2 import (
@@ -24,9 +23,13 @@ from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncConfig
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
 
 from client.asd.args import asd_config_from_args
+from client.common.audio import AUDIO_CODEC_CONFIGS
+from client.common.bypass import resolve_bypass_asd
+from client.common.paths import ensure_parent_dir
 from client.lipsync.args import lipsync_config_from_args
 from client.s2s.args import s2s_config_from_args
-from client.utils import is_file_available
+from common.audio_utils import is_wav_file
+from common.media import is_file_available
 
 MB = 1024 * 1024
 
@@ -58,6 +61,15 @@ class ControllerConfig:
         translated_audio: Path to pre-translated audio file (WAV or
             MP3). When provided, S2S is bypassed and this audio is
             sent directly to LipSync (optional).
+        explicit_lipsync_input_audio_codec: User-provided
+            ``--lipsync-input-audio-codec`` value, if any.
+        combine_chunks_per_speaker: When ``True`` (default), consecutive
+            same-speaker diarization segments are merged into one before
+            streaming. When ``False``, one segment per source unit (e.g.
+            per word) is kept, enabling fine-grained diarization streaming.
+        request_id: Correlation id stamped on every request message and
+            echoed by the controller in responses. ``None`` lets the
+            request generator create a UUID4 per request stream.
 
     Examples:
         >>> from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechConfig
@@ -87,11 +99,18 @@ class ControllerConfig:
     diarization_file: str | None = None
     background_audio_input: str | None = None
     translated_audio: str | None = None
+    explicit_lipsync_input_audio_codec: str | None = None
     bypass_asd: bool = False
     diarization_rows_per_chunk: int | None = 10
+    combine_chunks_per_speaker: bool = True
+    request_id: str | None = None
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> "ControllerConfig":
+    def from_args(
+        cls,
+        args: argparse.Namespace,
+        auto_bypass_asd: bool = True,
+    ) -> "ControllerConfig":
         """Build a ``ControllerConfig`` from parsed CLI arguments.
 
         Builds NIM protobuf configs via ``s2s_config_from_args``,
@@ -100,14 +119,27 @@ class ControllerConfig:
         or auto-detected from missing diarization file),
         ``asd_config`` is set to ``None`` and
         ``lipsync_config.is_speaker_info_provided`` is forced to
-        ``False``.  I/O fields are populated only when the
-        corresponding attributes exist on *args*.
+        ``False``.  When translated audio is provided and
+        ``--lipsync-input-audio-codec`` is omitted, the LipSync input
+        codec is detected from the file content.  I/O fields are
+        populated only when the corresponding attributes exist on
+        *args*.
 
         Args:
             args (argparse.Namespace): Parsed argument namespace with
                 controller, S2S, ASD, and LipSync attributes.  I/O
                 attributes (``input_audio``, ``input_mp4``,
                 ``output_mp4``, ``diarization_file``) are optional.
+                ``diarization_chunked_per_segment`` (optional, default
+                ``False``) is the inverse of
+                ``combine_chunks_per_speaker``: when set, one diarization
+                chunk per source segment is kept instead of merging
+                consecutive same-speaker segments.
+            auto_bypass_asd (bool): When ``True`` (default), bypass ASD
+                automatically if no diarization file was provided.
+                Callers that supply diarization later (e.g. the batch
+                processing client) should pass ``False`` to keep ASD
+                enabled unless ``--bypass-asd`` was set explicitly.
 
         Returns:
             ControllerConfig: Populated configuration instance.
@@ -120,6 +152,7 @@ class ControllerConfig:
             ...     chunk_size_video_bytes=1048576,
             ...     source_language="en",
             ...     target_language="de",
+            ...     voice_name=None,
             ...     elevenlabs_num_speakers=0,
             ...     elevenlabs_drop_background_audio=False,
             ...     elevenlabs_use_profanity_filter=False,
@@ -142,11 +175,7 @@ class ControllerConfig:
             >>> cfg.controller_server
             'localhost:50056'
         """
-        # Auto-detect bypass_asd when no diarization file is provided
-        bypass_asd = getattr(args, "bypass_asd", False)
-        diarization_file = getattr(args, "diarization_file", None)
-        if not bypass_asd and diarization_file is None:
-            bypass_asd = True
+        bypass_asd = resolve_bypass_asd(args=args, auto_bypass_asd=auto_bypass_asd)
 
         asd_config = None if bypass_asd else asd_config_from_args(args)
 
@@ -155,6 +184,13 @@ class ControllerConfig:
             lipsync_config.is_speaker_info_provided = False
 
         translated_audio = getattr(args, "translated_audio", None)
+
+        # Detect the actual audio codec from file content only when the
+        # customer did not provide --lipsync-input-audio-codec. ElevenLabs
+        # sometimes returns MP3 data inside a .wav filename.
+        if translated_audio and getattr(args, "lipsync_input_audio_codec", None) is None:
+            actual_codec = "wav" if is_wav_file(translated_audio) else "mp3"
+            lipsync_config.input_audio_codec = AUDIO_CODEC_CONFIGS[actual_codec]
 
         # When translated audio is provided, S2S is bypassed — skip s2s_config
         s2s_config = None if translated_audio else s2s_config_from_args(args)
@@ -179,8 +215,17 @@ class ControllerConfig:
             diarization_file=getattr(args, "diarization_file", None),
             background_audio_input=getattr(args, "background_audio_input", None),
             translated_audio=translated_audio,
+            explicit_lipsync_input_audio_codec=getattr(
+                args,
+                "lipsync_input_audio_codec",
+                None,
+            ),
             bypass_asd=bypass_asd,
             diarization_rows_per_chunk=diarization_rows_per_chunk,
+            # CLI exposes the inverse (--diarization-chunked-per-segment); merging
+            # by speaker stays the default when the flag is absent.
+            combine_chunks_per_speaker=not getattr(args, "diarization_chunked_per_segment", False),
+            request_id=getattr(args, "request_id", None),
         )
 
     def __str__(self) -> str:
@@ -253,9 +298,7 @@ class ControllerConfig:
             )
 
         if self.output_mp4 is not None:
-            output_dir = os.path.dirname(self.output_mp4)
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
+            ensure_parent_dir(path=self.output_mp4)
 
         if self.diarization_file and not is_file_available(self.diarization_file, ["json", "csv"]):
             raise RuntimeError(

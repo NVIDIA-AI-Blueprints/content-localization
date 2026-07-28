@@ -10,8 +10,10 @@ from unittest.mock import patch
 
 import pytest
 
-from base_utils import Auth
-from base_utils import SSLConfigurationError
+from common.base_utils import Auth
+from common.base_utils import SSLConfigurationError
+
+pytestmark = pytest.mark.unit
 
 
 class TestAuth:

@@ -27,24 +27,18 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install documentation dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-          pip install matplotlib
-
-      - name: Generate protobuf files
-        run: |
-          chmod +x protos/generate_protos.sh
-          ./protos/generate_protos.sh
+          pip install grpcio-tools==1.67.1 protobuf==5.29.6
+          pip install ".[docs]" matplotlib
 
       - name: Build Sphinx documentation
         env:
-          PYTHONPATH: ${{ env.PYTHONPATH }}:${{ github.workspace }}/protos/generated
-        run: sh docs/build_docs.sh
+          PYTHONPATH: ${{ github.workspace }}/protos/generated
+        run: bash docs/build_docs.sh
 
       - name: Prepare Pages artifact content
         run: |

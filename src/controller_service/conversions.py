@@ -7,13 +7,17 @@ This module provides functions to convert between different protobuf message
 formats used in the content localization pipeline:
 
 * ContentLocalizationRequest → SpeechToSpeechRequest (S2S)
-* ContentLocalizationRequest → ActiveSpeakerDetectionData (ASD video)
-* ContentLocalizationRequest → ActiveSpeakerDetectionData (ASD audio)
-* ContentLocalizationRequest → ActiveSpeakerDetectionData (ASD diarization)
-* ContentLocalizationRequest → LipsyncInputData (LipSync video)
-* ContentLocalizationRequest → LipsyncInputData (LipSync background audio)
-* ContentLocalizationRequest → LipsyncInputData (LipSync translated audio,
+* ContentLocalizationRequest → DetectActiveSpeakerRequest (ASD video)
+* ContentLocalizationRequest → DetectActiveSpeakerRequest (ASD audio)
+* ContentLocalizationRequest → DetectActiveSpeakerRequest (ASD diarization)
+* ContentLocalizationRequest → LipsyncRequest (LipSync video)
+* ContentLocalizationRequest → LipsyncRequest (LipSync background audio)
+* ContentLocalizationRequest → LipsyncRequest (LipSync translated audio,
   bypass S2S mode)
+
+Each conversion produces a ready-to-send request message, writing the
+payload directly into the nested data field so every chunk is copied
+only once.
 
 These conversions are used in the multi-threaded pipeline where the
 ContentLocalizationDeserializer distributes incoming requests to different
@@ -21,12 +25,12 @@ service clients (S2S, ASD, LipSync).
 
 Functions:
     to_s2s_request: Convert to S2S service format
-    to_asd_video_data: Convert to ASD video data
-    to_asd_audio_data: Convert to ASD audio data
-    to_asd_diarization_data: Convert to ASD diarization data
-    to_lipsync_video: Convert to LipSync video input format
-    to_lipsync_background_audio: Convert to LipSync background audio input
-    to_lipsync_translated_audio: Convert to LipSync audio input (bypass S2S)
+    to_asd_video_data: Convert to an ASD request carrying video data
+    to_asd_audio_data: Convert to an ASD request carrying audio data
+    to_asd_diarization_data: Convert to an ASD request carrying diarization
+    to_lipsync_video: Convert to a LipSync request carrying video data
+    to_lipsync_background_audio: Convert to a LipSync background audio request
+    to_lipsync_translated_audio: Convert to a LipSync translated audio request
 
 Example:
     from controller_service.conversions import to_s2s_request
@@ -37,14 +41,14 @@ Example:
 import traceback
 
 from nvidia.ai4m.activespeakerdetection.v1.activespeakerdetection_pb2 import (
-    ActiveSpeakerDetectionData,
+    DetectActiveSpeakerRequest,
 )
 from nvidia.ai4m.controller.v1.controller_pb2 import ContentLocalizationRequest
-from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncInputData
+from nvidia.ai4m.lipsync.v1.lipsync_pb2 import LipsyncRequest
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechRequest
 
-from base_utils import logger
 from common.audio_utils import create_wav_header  # noqa: F401  # re-exported
+from common.base_utils import logger
 from controller_service.constants import AUDIO_CONFIG_DEFAULTS
 
 
@@ -101,73 +105,129 @@ def to_s2s_request(
     return s2s_request
 
 
-def to_asd_video_data(request: ContentLocalizationRequest) -> ActiveSpeakerDetectionData:
-    """Convert a ``ContentLocalizationRequest`` to ASD video data.
+def to_asd_video_data(request: ContentLocalizationRequest) -> DetectActiveSpeakerRequest:
+    """Convert a ``ContentLocalizationRequest`` to an ASD request with video data.
+
+    The video bytes are written directly into the nested ``data``
+    field of the request, so each chunk is copied only once.
 
     Args:
         request: Incoming content-localisation request.
 
     Returns:
-        ``ActiveSpeakerDetectionData`` with ``video_data`` populated.
+        ``DetectActiveSpeakerRequest`` with ``data.video_data`` populated.
+
+    Raises:
+        ValueError: If ``video_file_data`` is not present.
+
+    Examples:
+        >>> req = ContentLocalizationRequest(video_file_data=b"\\x00")
+        >>> to_asd_video_data(req).data.video_data
+        b'\\x00'
     """
     if not request.HasField("video_file_data"):
         raise ValueError("Video data not found in request")
-    return ActiveSpeakerDetectionData(video_data=request.video_file_data)
+    asd_request = DetectActiveSpeakerRequest()
+    asd_request.data.video_data = request.video_file_data
+    return asd_request
 
 
-def to_asd_audio_data(request: ContentLocalizationRequest) -> ActiveSpeakerDetectionData:
-    """Convert a ``ContentLocalizationRequest`` to ASD audio data.
+def to_asd_audio_data(request: ContentLocalizationRequest) -> DetectActiveSpeakerRequest:
+    """Convert a ``ContentLocalizationRequest`` to an ASD request with audio data.
+
+    The audio bytes are written directly into the nested ``data``
+    field of the request, so each chunk is copied only once.
 
     Args:
         request: Incoming content-localisation request.
 
     Returns:
-        ``ActiveSpeakerDetectionData`` with ``audio_data`` populated.
+        ``DetectActiveSpeakerRequest`` with ``data.audio_data`` populated.
+
+    Raises:
+        ValueError: If ``audio_data`` is not present.
+
+    Examples:
+        >>> req = ContentLocalizationRequest(audio_data=b"\\x00")
+        >>> to_asd_audio_data(req).data.audio_data
+        b'\\x00'
     """
     if not request.HasField("audio_data"):
         raise ValueError("Audio data not found in request")
-    return ActiveSpeakerDetectionData(audio_data=request.audio_data)
+    asd_request = DetectActiveSpeakerRequest()
+    asd_request.data.audio_data = request.audio_data
+    return asd_request
 
 
-def to_asd_diarization_data(request: ContentLocalizationRequest) -> ActiveSpeakerDetectionData:
-    """Convert a ``ContentLocalizationRequest`` to ASD diarization data.
+def to_asd_diarization_data(request: ContentLocalizationRequest) -> DetectActiveSpeakerRequest:
+    """Convert a ``ContentLocalizationRequest`` to an ASD request with diarization info.
+
+    The diarization message is copied directly into the nested ``data``
+    field of the request, so each chunk is copied only once.
 
     Args:
         request: Incoming content-localisation request.
 
     Returns:
-        ``ActiveSpeakerDetectionData`` with ``diarization_info`` populated.
+        ``DetectActiveSpeakerRequest`` with ``data.diarization_info``
+        populated.
+
+    Raises:
+        ValueError: If ``diarization_info`` is not present.
+
+    Examples:
+        >>> req = ContentLocalizationRequest()  # doctest: +SKIP
+        >>> to_asd_diarization_data(req)  # doctest: +SKIP
     """
     if not request.HasField("diarization_info"):
         raise ValueError("Diarization info not found in request")
-    return ActiveSpeakerDetectionData(diarization_info=request.diarization_info)
+    asd_request = DetectActiveSpeakerRequest()
+    asd_request.data.diarization_info.CopyFrom(request.diarization_info)
+    return asd_request
 
 
-def to_lipsync_video(request: ContentLocalizationRequest) -> LipsyncInputData:
-    """Convert a ``ContentLocalizationRequest`` to ``LipsyncInputData`` (video).
+def to_lipsync_video(request: ContentLocalizationRequest) -> LipsyncRequest:
+    """Convert a ``ContentLocalizationRequest`` to a LipSync request with video data.
+
+    The video bytes are written directly into the nested ``input``
+    field of the request, so each chunk is copied only once.
 
     Args:
         request: Incoming content-localisation request.
 
     Returns:
-        ``LipsyncInputData`` containing the video bytes.
+        ``LipsyncRequest`` with ``input.video_file_data`` populated.
+
+    Raises:
+        ValueError: If ``video_file_data`` is not present.
+
+    Examples:
+        >>> req = ContentLocalizationRequest(video_file_data=b"\\x00")
+        >>> to_lipsync_video(req).input.video_file_data
+        b'\\x00'
     """
     if not request.HasField("video_file_data"):
         raise ValueError("Video data not found in request")
-    return LipsyncInputData(video_file_data=request.video_file_data)
+    lipsync_request = LipsyncRequest()
+    lipsync_request.input.video_file_data = request.video_file_data
+    return lipsync_request
 
 
 def to_lipsync_background_audio(
     request: ContentLocalizationRequest,
-) -> LipsyncInputData:
-    """Convert a ``ContentLocalizationRequest`` to ``LipsyncInputData`` (background audio).
+) -> LipsyncRequest:
+    """Convert a ``ContentLocalizationRequest`` to a LipSync request with background audio.
+
+    The audio bytes are written directly into the nested ``input``
+    field of the request, so each chunk is copied only once.
 
     Args:
         request: Incoming content-localisation request with
             ``background_audio_data``.
 
     Returns:
-        ``LipsyncInputData`` with ``background_audio_file_data`` populated.
+        ``LipsyncRequest`` with ``input.background_audio_file_data``
+        populated.
 
     Raises:
         ValueError: If ``background_audio_data`` is not present.
@@ -175,28 +235,32 @@ def to_lipsync_background_audio(
     Examples:
         >>> req = ContentLocalizationRequest(background_audio_data=b"\\x00")
         >>> lip = to_lipsync_background_audio(req)
-        >>> lip.background_audio_file_data
+        >>> lip.input.background_audio_file_data
         b'\\x00'
     """
     if not request.HasField("background_audio_data"):
         raise ValueError("Background audio data not found in request")
-    return LipsyncInputData(background_audio_file_data=request.background_audio_data)
+    lipsync_request = LipsyncRequest()
+    lipsync_request.input.background_audio_file_data = request.background_audio_data
+    return lipsync_request
 
 
 def to_lipsync_translated_audio(
     request: ContentLocalizationRequest,
-) -> LipsyncInputData:
-    """Convert a ``ContentLocalizationRequest`` to ``LipsyncInputData`` (translated audio).
+) -> LipsyncRequest:
+    """Convert a ``ContentLocalizationRequest`` to a LipSync request with translated audio.
 
     Used in no-S2S mode: the client provides pre-translated audio that
-    bypasses S2S and feeds directly into LipSync.
+    bypasses S2S and feeds directly into LipSync. The audio bytes are
+    written directly into the nested ``input`` field of the request,
+    so each chunk is copied only once.
 
     Args:
         request: Incoming content-localisation request with
             ``translated_audio_data``.
 
     Returns:
-        ``LipsyncInputData`` with ``audio_file_data`` populated.
+        ``LipsyncRequest`` with ``input.audio_file_data`` populated.
 
     Raises:
         ValueError: If ``translated_audio_data`` is not present.
@@ -204,9 +268,11 @@ def to_lipsync_translated_audio(
     Examples:
         >>> req = ContentLocalizationRequest(translated_audio_data=b"\\x00")
         >>> lip = to_lipsync_translated_audio(req)
-        >>> lip.audio_file_data
+        >>> lip.input.audio_file_data
         b'\\x00'
     """
     if not request.HasField("translated_audio_data"):
         raise ValueError("Translated audio data not found in request")
-    return LipsyncInputData(audio_file_data=request.translated_audio_data)
+    lipsync_request = LipsyncRequest()
+    lipsync_request.input.audio_file_data = request.translated_audio_data
+    return lipsync_request

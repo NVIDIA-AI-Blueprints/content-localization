@@ -1,0 +1,9 @@
+---
+# Protolint configuration.
+# Aligns the proto line-length rule with the project's 100-char standard
+# (the same limit Ruff enforces for Python). The default of 80 conflicts
+# with the mandated SPDX header at line 2 of every .proto, which is 99 chars.
+lint:
+  rules_option:
+    max_line_length:
+      max_chars: 100

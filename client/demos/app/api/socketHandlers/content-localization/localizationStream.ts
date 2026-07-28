@@ -15,13 +15,23 @@ import {
   ContentLocalizationRequest,
   ContentLocalizationResponse,
 } from "../../../generated_protos/nvidia/ai4m/controller/v1/controller";
-import type { AudioDiarizationInfo } from "../../../generated_protos/nvidia/ai4m/activespeakerdetection/v1/activespeakerdetection";
+import { AudioCodec } from "../../../generated_protos/nvidia/ai4m/audio/v1/audio";
+import {
+  ActiveSpeakerDetectionConfig,
+  AudioSourceConfig,
+  type AudioDiarizationInfo,
+} from "../../../generated_protos/nvidia/ai4m/activespeakerdetection/v1/activespeakerdetection";
+import { LipsyncConfig } from "../../../generated_protos/nvidia/ai4m/lipsync/v1/lipsync";
 import { clientCallHandler } from "../../utils/protoHelper";
 import { remuxVideo } from "../../utils/muxDemux";
 import { getFileExtension } from "../../../utils/codecConfig";
 import { getStreamingArgs } from "../../utils/ffmpegConfig";
 import type { CodecId } from "../../../utils/codecConfig";
 import { getOutputDir, getServerAddress } from "./config";
+
+const DEFAULT_ASD_SPEAKER_DETECTION_THRESHOLD = 0.5986;
+const DEFAULT_LIPSYNC_BITRATE_MBPS = 20;
+const DEFAULT_LIPSYNC_IDR_INTERVAL = 8;
 
 export interface LocalizationStreamCallbacks {
   onData: (audio: Buffer, video: Buffer) => void;
@@ -35,9 +45,10 @@ export interface LocalizationStreamCallbacks {
  *
  * Enforces the required message order (per proto and client/controller/app.py):
  * 0. Controller config: one message with controller_config (bypass_asd, etc.).
- * 1. Diarization: zero or more messages with only diarization_info.
- * 2. Config: one message with only s2s_config.
- * 3. Data: separate messages with only video_file_data or only audio_data.
+ * 1. Service configs: one optional asd_config and one lipsync_config.
+ * 2. Diarization: zero or more messages with only diarization_info.
+ * 3. S2S config: one message with only s2s_config.
+ * 4. Data: separate messages with only video_file_data or only audio_data.
  *
  * Chunks are queued via a promise chain so writes never interleave.
  */
@@ -45,8 +56,8 @@ class GrpcChunkStreamer {
   private queue: Promise<void> | null = null;
   private ended = false;
   private diarizationSent = false;
-  private configSent = false;
-
+  private serviceConfigSent = false;
+  private s2sConfigSent = false;
   private controllerConfigSent = false;
 
   constructor(
@@ -84,8 +95,9 @@ class GrpcChunkStreamer {
 
   private async send(audio: Buffer, video: Buffer): Promise<void> {
     this.sendControllerConfig();
+    this.sendServiceConfigs();
     this.sendDiarization();
-    this.sendConfig();
+    this.sendS2sConfig();
     this.sendData(audio, video);
   }
 
@@ -96,6 +108,11 @@ class GrpcChunkStreamer {
       ContentLocalizationRequest.fromPartial({
         controller_config: ContentLocalizationConfig.fromPartial({
           bypass_asd: this.bypassAsd,
+          // The demo always streams preprocessed WAV; declaring the codec
+          // here keeps the controller off its assume-WAV fallback path.
+          input_audio_config: {
+            encoding: AudioCodec.AUDIO_CODEC_WAV,
+          },
         }),
         request_id: this.streamId,
       }),
@@ -106,7 +123,45 @@ class GrpcChunkStreamer {
     });
   }
 
-  /** Step 1: send diarization chunks (once, before s2s_config). */
+  /** Step 1: send downstream service configs (once, before data). */
+  private sendServiceConfigs(): void {
+    if (this.serviceConfigSent) return;
+    if (!this.bypassAsd) {
+      this.call.write(
+        ContentLocalizationRequest.fromPartial({
+          asd_config: ActiveSpeakerDetectionConfig.fromPartial({
+            input_audio_config: {
+              encoding: AudioCodec.AUDIO_CODEC_WAV,
+            },
+            audio_source_config: AudioSourceConfig.AUDIO_SOURCE_CONFIG_SEPARATE_STREAM,
+            speaker_detection_threshold: DEFAULT_ASD_SPEAKER_DETECTION_THRESHOLD,
+          }),
+          request_id: this.streamId,
+        }),
+      );
+    }
+    this.call.write(
+      ContentLocalizationRequest.fromPartial({
+        lipsync_config: LipsyncConfig.fromPartial({
+          input_audio_codec: AudioCodec.AUDIO_CODEC_MP3,
+          output_video_encoding: {
+            lossy: {
+              bitrate_mbps: DEFAULT_LIPSYNC_BITRATE_MBPS,
+              idr_interval: DEFAULT_LIPSYNC_IDR_INTERVAL,
+            },
+          },
+        }),
+        request_id: this.streamId,
+      }),
+    );
+    this.serviceConfigSent = true;
+    logger.debug("[ContentLocalization] Service configs sent to controller", {
+      asd_config: !this.bypassAsd,
+      lipsync_config: true,
+    });
+  }
+
+  /** Step 2: send diarization chunks (once, before s2s_config). */
   private sendDiarization(): void {
     if (this.diarizationSent || this.diarizationChunks.length === 0) return;
     for (const chunk of this.diarizationChunks) {
@@ -123,9 +178,9 @@ class GrpcChunkStreamer {
     });
   }
 
-  /** Step 2: send s2s_config (once, after diarization). */
-  private sendConfig(): void {
-    if (this.configSent) return;
+  /** Step 3: send s2s_config (once, after service configs and diarization). */
+  private sendS2sConfig(): void {
+    if (this.s2sConfigSent) return;
     this.call.write(
       ContentLocalizationRequest.fromPartial({
         s2s_config: {
@@ -136,11 +191,11 @@ class GrpcChunkStreamer {
         request_id: this.streamId,
       }),
     );
-    this.configSent = true;
+    this.s2sConfigSent = true;
     logger.debug("[ContentLocalization] Localization request (s2s_config) sent to controller");
   }
 
-  /** Step 3: send video and audio as separate messages. */
+  /** Step 4: send video and audio as separate messages. */
   private sendData(audio: Buffer, video: Buffer): void {
     if (video.length > 0) {
       this.call.write(

@@ -8,8 +8,9 @@ flowchart LR
     asdApp --> asdStub[SpeakerDetectionStub]
 
     diarizationLoader --> flatFormat[FlatJSON]
-    diarizationLoader --> rivaFormat[RivaJSON]
     diarizationLoader --> elevenLabsFormat[ElevenLabsJSON]
+    diarizationLoader --> elevenLabsDubbingApiFormat[ElevenLabsDubbingAPIJSON]
+    diarizationLoader --> cambFormat[CambAIJSON]
 
     asdStub --> asdService[SpeakerDetectionService]
     asdStub --> asdReq[SpeakerDetectionRequest]

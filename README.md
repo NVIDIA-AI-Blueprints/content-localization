@@ -8,7 +8,7 @@ The Content Localization Blueprint is a comprehensive solution for translating a
 
 The blueprint supports multiple client types to accommodate different deployment scenarios and use-case requirements.
 
-Note: To get access to the LipSync feature of the Content localization Blueprint, please request to join our [NVIDIA AI for Media Private Access Program](https://developer.nvidia.com/topics/ai/generative-ai/ai-for-media/private-access)
+Note: To get access to the LipSync feature of the Content localization Blueprint, please request to join our [NVIDIA AI for Media Private Access Program](https://developer.nvidia.com/ai-for-media/private-access-program)
 
 ## Overall Architecture
 
@@ -27,8 +27,6 @@ The diagram below shows the controller-centric end-to-end architecture used to o
 GOVERNING TERMS: The blueprint software is governed by the [Apache License 2.0](https://github.com/NVIDIA-AI-Blueprints/content-localization/LICENSE.md), and enables use of separate open source and proprietary software, models and services governed by their respective licenses, including those below.
   - [Active Speaker Detection NIM](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/active-speaker-detection)
   - [LipSync NIM](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/lipsync)
-  - [RIVA ASR NIM](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/riva-asr?version=1.3.0)
-  - [RIVA Magpie-TTS-Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot)
   - [Eleven Labs API service](https://elevenlabs.io/dubbing-studio)
   - [Camb.ai service](https://www.camb.ai/features/translation)
 
@@ -37,7 +35,7 @@ Sample Assets: Use of the assets is governed by the [NVIDIA Sample Data License]
 Link to relevant licenses:
 
 - [ThirdPartyLicenses.md](ThirdPartyLicenses.md) — Third-party open-source software licenses
-- [NIMLICENSES.md](NIMLICENSES.md) — NVIDIA NIM container licenses (LipSync, ASD, RIVA ASR, RIVA TTS)
+- [NIMLICENSES.md](NIMLICENSES.md) — NVIDIA NIM container licenses (LipSync, ASD)
 
 ## Contributing
 
@@ -116,15 +114,13 @@ Get your NGC API keys from: https://ngc.nvidia.com/setup/api-key
 |---|---|---|
 | `LIPSYNC_API_KEY` | LipSync NIM container | When using Lipsync |
 | `ASD_API_KEY` | ASD NIM container | When using Active Speaker Detection |
-| `AST_API_KEY` | RIVA ASR NIM container | When using the RIVA backend |
-| `TTS_API_KEY` | RIVA TTS NIM container | When using the RIVA backend |
 
 **Third-party API keys** — required only when using the corresponding S2S backend:
 
 | Variable | When required |
 |---|---|
 | `ELEVENLABS_API_KEY` | When `S2S_SERVICE=EL_DUBBING` |
-| `CAMB_API_KEY` | When using CAMB.AI dubbing scripts |
+| `CAMB_API_KEY` | When `S2S_SERVICE=CAMB_DUBBING` (and for the CAMB.AI helper scripts) |
 ---
 
 ## Development Environment Setup
@@ -141,8 +137,6 @@ Create a `.env` file in the project root with your credentials:
 # NIM container keys (mapped to NGC_API_KEY inside each container by docker-compose.yml)
 LIPSYNC_API_KEY=your_ngc_api_key_here
 ASD_API_KEY=your_ngc_api_key_here
-AST_API_KEY=your_ngc_api_key_here      # RIVA backend only
-TTS_API_KEY=your_ngc_api_key_here      # RIVA backend only
 
 # Third-party S2S backend keys
 ELEVENLABS_API_KEY=your_11labs_api_key_here
@@ -180,14 +174,14 @@ Install the project dependencies and commonly used extras:
 
 ```bash
 # Install core dependencies with non-GPU extras (test, lint, docs)
-uv pip install -r pyproject.toml --extra test --extra lint --extra docs
+uv sync --extra test --extra lint --extra docs
 ```
 
 Install GPU extras only on hosts with CUDA Toolkit headers available (`cuda.h`):
 
 ```bash
 # Optional: install GPU extras (requires CUDA Toolkit development headers)
-uv pip install -r pyproject.toml --extra gpu
+uv sync --extra gpu
 ```
 
 ### 5. Generate Protocol Buffer Files
@@ -202,7 +196,7 @@ wget -O protos/health.proto https://raw.githubusercontent.com/grpc/grpc/master/s
 bash ./protos/generate_protos.sh
 ```
 
-### 7. Install Development Tools
+### 6. Install Development Tools
 
 Install linting and pre-commit hooks:
 
@@ -227,7 +221,7 @@ To run pre-commit on all files manually:
 pre-commit run --all-files
 ```
 
-### 8. Set Python Path
+### 7. Set Python Path
 
 Add the project root, `src`, `client`, and generated protobuf files to your `PYTHONPATH`:
 
@@ -241,64 +235,61 @@ Add this line to your shell profile (`.bashrc` or `.zshrc`) to make it permanent
 echo 'export PYTHONPATH="${PYTHONPATH}:'"${PWD}"':'"${PWD}"'/src:'"${PWD}"'/client:'"${PWD}"'/protos/generated"' >> ~/.bashrc
 ```
 
-### 9. Create Required Directories
+### 8. Create Required Directories
 
-Create directories for test outputs and builds:
+Create the directories for test outputs, builds, and the NIM model caches:
 
 ```bash
-mkdir -p build
-mkdir -p outputs
-
+mkdir -p build outputs volumes/models/asd volumes/models/lipsync
 ```
-# Set permissions for all files and directories
+
+The ASD and LipSync NIM services download their models into the bind-mounted
+cache directories (`volumes/models/asd` and `volumes/models/lipsync`). On a
+fresh clone these directories must already **exist** — they ship with a
+`.gitkeep` placeholder — otherwise `docker compose up` fails with
+`Permission denied (os error 13)` when Docker cannot resolve the mount path.
+
+The NIM containers run as `root`, so they can write into these directories once
+they exist. Ensure the `volumes`, `build`, and `outputs` trees are writable by
+your host user and group (no world-writable `777` needed):
+
 ```bash
-chmod -R 777 .
+chmod -R u+rwX,g+rwX volumes build outputs
 ```
 
-### 10. Deploy and Verify Services (First-Time Setup)
+### 9. Deploy and Verify Services (First-Time Setup)
 
 For first-time deployment, use the deploy scripts to verify each service individually. This approach downloads models and verifies that each service starts correctly before deploying the full stack.
 
-#### Deploy ASR Service (Canary Model)
+#### Deploy ASD Service
 
-Deploy the RIVA ASR service with the Canary model:
+Deploy the Active Speaker Detection service:
 
 ```bash
-./scripts/deploy_asr_canary.sh
+./scripts/nims/deploy_asd.sh
 ```
 
 This will:
-- Download the Canary 1B ASR model to `volumes/models/ast-canary/`
-- Start the RIVA ASR container on ports 8003 (HTTP) and 50053 (gRPC)
+- Download the ASD model to `volumes/models/asd/`
+- Start the ASD container on ports 8005 (HTTP) and 50055 (gRPC)
 - Verify the service is running correctly
 
 **Note**: Model download may take several minutes depending on your internet connection. Press `Ctrl+C` to stop the service once verified.
-
-#### Deploy TTS Service (Magpie Zero-Shot)
-
-Deploy the zero-shot TTS service:
-
-```bash
-./scripts/deploy_tts_zeroshot.sh
-```
-
-This requires the `NGC_API_KEY` environment variable and will create the necessary cache directories automatically.
-This will download the Magpie Zero-Shot model to `volumes/models/tts-zeroshot/`.
 
 #### Deploy LipSync Service
 
 Deploy the LipSync service:
 
 ```bash
-./scripts/deploy_lipsync.sh
+./scripts/nims/deploy_lipsync.sh
 ```
 
 This will:
 - Download the LipSync models to `volumes/models/lipsync/`
-- Start the LipSync container on ports 8000 (HTTP) and 8001 (gRPC)
+- Start the LipSync container on ports 8004 (HTTP) and 50054 (gRPC)
 - Verify the service is running correctly
 
-**Note**: This requires the `NGC_API_KEY` environment variable. Press `Ctrl+C` to stop the service once verified.
+**Note**: This requires the `LIPSYNC_API_KEY` (or `NGC_API_KEY`) environment variable. Press `Ctrl+C` to stop the service once verified.
 
 #### Deployment Notes
 
@@ -306,7 +297,7 @@ This will:
 - Run each script in a separate terminal or stop (Ctrl+C) before running the next
 - These scripts are for **verification only** - use docker compose for production deployments
 
-### 11. Verify Setup
+### 10. Verify Setup
 
 If all steps completed successfully, you're ready to run the full service stack!
 
@@ -326,7 +317,7 @@ You can now proceed to [Running the Services](#running-the-services) to launch t
 Start the full Content Localization stack:
 
 ```bash
-# Default profile: S2S (ElevenLabs/CambAI) + ASD + LipSync + Controller + Demo App
+# Full stack: S2S (ElevenLabs/CambAI) + ASD + LipSync + Controller + Demo App
 docker compose --profile demo-app-third-party-s2s \
     --env-file configs/elevenlabs.env \
     --env-file .env \
@@ -335,24 +326,20 @@ docker compose --profile demo-app-third-party-s2s \
 
 ### Available Profiles
 
-Different service combinations for various use cases. Use the `--profile` flag to select which services to run:
+Different service combinations for various use cases. Use the `--profile` flag to select which services to run.
+The canonical profile reference lives in [docs/source/deployment.rst](docs/source/deployment.rst).
 
-| Profile | S2S | ASR (RIVA) | TTS (RIVA) | ASD | LipSync | Controller | Demo App | Description |
-|---------|-----|------------|------------|-----|---------|------------|----------|-------------|
-| `default` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | All services (for testing) |
-| `third-party-s2s` | ✓ | - | - | - | - | - | - | S2S only with ElevenLabs/CambAI |
-| `riva` | ✓ | ✓ | ✓ | - | - | - | - | S2S with RIVA ASR/TTS |
-| `lipsync` | - | - | - | - | ✓ | - | - | LipSync only |
-| `third-party-s2s-lipsync` | ✓ | - | - | - | ✓ | - | - | S2S (ElevenLabs/CambAI) + LipSync |
-| `riva-lipsync` | ✓ | ✓ | ✓ | - | ✓ | - | - | S2S (RIVA) + LipSync |
-| `third-party-s2s-asd-lipsync` | ✓ | - | - | ✓ | ✓ | - | - | Full pipeline with ElevenLabs/CambAI |
-| `riva-asd-lipsync` | ✓ | ✓ | ✓ | ✓ | ✓ | - | - | Full pipeline with RIVA |
-| `asd` | - | - | - | ✓ | - | - | - | Active Speaker Detection only |
-| `controller-third-party-s2s` | ✓ | - | - | ✓ | ✓ | ✓ | - | Orchestrated pipeline (ElevenLabs/CambAI) |
-| `controller-riva` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - | Orchestrated pipeline (RIVA) |
-| `demo-app` | ✓ | - | - | - | - | - | ✓ | S2S + Web Demo App |
-| `demo-app-third-party-s2s` | ✓ | - | - | ✓ | ✓ | ✓ | ✓ | Full stack with Web Demo (ElevenLabs/CambAI) |
-| `demo-app-riva` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Full stack with Web Demo (RIVA) |
+| Profile | S2S | ASD | LipSync | Controller | Demo App | Description |
+|---------|-----|-----|---------|------------|----------|-------------|
+| `default` | ✓ | ✓ | ✓ | ✓ | ✓ | All services (for testing) |
+| `third-party-s2s` | ✓ | - | - | - | - | S2S only with ElevenLabs/CambAI |
+| `lipsync` | ✓ | - | ✓ | - | - | LipSync + S2S backend |
+| `third-party-s2s-lipsync` | ✓ | - | ✓ | - | - | S2S (ElevenLabs/CambAI) + LipSync |
+| `third-party-s2s-asd-lipsync` | ✓ | ✓ | ✓ | - | - | Full pipeline with ElevenLabs/CambAI |
+| `asd` | - | ✓ | - | - | - | Active Speaker Detection only |
+| `controller-third-party-s2s` | ✓ | ✓ | ✓ | ✓ | - | Orchestrated pipeline (ElevenLabs/CambAI) |
+| `asd-lipsync` | - | ✓ | ✓ | ✓ | - | ASD + LipSync + Controller |
+| `demo-app-third-party-s2s` | ✓ | ✓ | ✓ | ✓ | ✓ | Full stack with Web Demo (ElevenLabs/CambAI) |
 
 #### Usage Examples
 
@@ -363,21 +350,9 @@ docker compose --profile demo-app-third-party-s2s \
     --env-file .env \
     up --build
 
-# RIVA with full pipeline and demo app  
-docker compose --profile demo-app-riva \
-    --env-file configs/riva.env \
-    --env-file .env \
-    up --build
-
 # CambAI S2S + ASD + LipSync (no controller, no demo)
 docker compose --profile third-party-s2s-asd-lipsync \
-    --env-file configs/elevenlabs.env \
-    --env-file .env \
-    up --build
-
-# RIVA S2S + ASD + LipSync (no controller, no demo)
-docker compose --profile riva-asd-lipsync \
-    --env-file configs/riva.env \
+    --env-file configs/camb.env \
     --env-file .env \
     up --build
 
@@ -387,31 +362,18 @@ docker compose --profile controller-third-party-s2s \
     --env-file .env \
     up --build
 
-# Controller orchestration with RIVA
-docker compose --profile controller-riva \
-    --env-file configs/riva.env \
-    --env-file .env \
-    up --build
-
-# Basic S2S with ElevenLabs only (also simialar for camb)
+# Basic S2S with ElevenLabs only (also similar for CambAI)
 docker compose --profile third-party-s2s \
     --env-file configs/elevenlabs.env \
-    --env-file .env \
-    up --build
-
-# Basic S2S with RIVA ASR/TTS
-docker compose --profile riva \
-    --env-file configs/riva.env \
     --env-file .env \
     up --build
 ```
 
 #### Profile Selection Guide
 
-- **For Development/Testing**: Use `demo-app-third-party-s2s` or `demo-app-riva` for the full stack with web interface
+- **For Development/Testing**: Use `demo-app-third-party-s2s` for the full stack with web interface
 - **For Production with ElevenLabs/CambAI**: Use `controller-third-party-s2s` for orchestrated processing
-- **For Production with RIVA**: Use `controller-riva` for orchestrated processing
-- **For Service Testing**: Use individual profiles like `third-party-s2s`, `riva`, `lipsync`, or `asd`
+- **For Service Testing**: Use individual profiles like `third-party-s2s`, `lipsync`, or `asd`
 
 ### Stop Services
 
@@ -434,13 +396,13 @@ View logs in real-time as services are running:
 docker compose logs -f
 
 # View logs from specific service
-docker compose logs -f s2s
+docker compose logs -f speech-to-speech
 docker compose logs -f asd
 docker compose logs -f controller
 docker compose logs -f lipsync
 
 # View logs from multiple services
-docker compose logs -f s2s controller
+docker compose logs -f speech-to-speech controller
 
 # View last 100 lines of logs
 docker compose logs --tail=100
@@ -452,24 +414,20 @@ For debugging or sharing, use the log copy script to save logs to local files:
 
 ```bash
 # Copy logs from all services to ./logs/ directory
-./scripts/copy_docker_logs.sh
+./scripts/misc/copy_docker_logs.sh
 
 # Copy logs from a specific service only
-./scripts/copy_docker_logs.sh s2s
-./scripts/copy_docker_logs.sh ast
-./scripts/copy_docker_logs.sh tts
-./scripts/copy_docker_logs.sh lipsync
-./scripts/copy_docker_logs.sh asd
-./scripts/copy_docker_logs.sh controller
+./scripts/misc/copy_docker_logs.sh s2s
+./scripts/misc/copy_docker_logs.sh lipsync
+./scripts/misc/copy_docker_logs.sh asd
+./scripts/misc/copy_docker_logs.sh controller
 
 # View help
-./scripts/copy_docker_logs.sh --help
+./scripts/misc/copy_docker_logs.sh --help
 ```
 
 This creates log files in `./logs/`:
 - `./logs/s2s.log` - Speech-to-Speech service logs
-- `./logs/ast.log` - ASR (RIVA) service logs  
-- `./logs/tts.log` - TTS (RIVA) service logs
 - `./logs/lipsync.log` - LipSync service logs
 - `./logs/asd.log` - Active Speaker Detection logs
 - `./logs/controller.log` - Controller orchestration logs
@@ -493,9 +451,9 @@ Each client is designed for specific use cases and can be used independently or 
 |--------|------|----------|----------|--------------|-------|
 | **Controller** | `client/controller/app.py` | Controller (S2S + ASD + LipSync orchestration) | Streamlined end-to-end content localization with single service communication | • Audio and video input processing<br>• Optional diarization input for speaker-aware dubbing<br>• Optional background audio pass-through to LipSync<br>• Pre-translated audio to bypass S2S (`--translated-audio`)<br>• Complete pipeline orchestration through Controller service<br>• Single gRPC "streaming" connection for entire workflow<br>• Simplified error handling and monitoring | `python client/controller/app.py [options]` |
 | **Direct** | `client/direct/app.py` | S2S + ASD + LipSync (direct communication) | Full control over service pipeline with direct service coordination | • Direct communication with each service<br>• Custom pipeline orchestration (S2S → LipSync → ASD)<br>• Pre-translated audio to bypass S2S (`--translated-audio`)<br>• Complete control over service interactions, easy to test and debug various services individually and in combination | `python client/direct/app.py [options]` |
-| **S2S** | `client/s2s/app.py` | S2S only | Audio translation between languages | • Audio input/output processing<br>• Real-time streaming with configurable chunks<br>• Built-in latency analysis and performance monitoring<br>• Support for WAV and MP3 formats for RIVA and ElevenLabs/CambAI, respectively. Ensure output file name is set to the desired format | `python client/s2s/app.py [options]` |
+| **S2S** | `client/s2s/app.py` | S2S only | Audio translation between languages | • Audio input/output processing<br>• Real-time streaming with configurable chunks<br>• Built-in latency analysis and performance monitoring<br>• Support for WAV and MP3 formats. Ensure output file name is set to the desired format | `python client/s2s/app.py [options]` |
 | **LipSync** | `client/lipsync/app.py` | LipSync only | Synchronize lip movements with audio | • Video and audio input processing<br>• Speaker info support from file<br>• Optional background audio mixing<br>• Multiple output formats and encoding options<br>• Streaming support with performance optimization | `python client/lipsync/app.py [options]` |
-| **ASD** | `client/asd/app.py` | ASD only | Detect active speakers in video | • Video processing for speaker detection<br>• Multi-format diarization input (flat, RIVA, ElevenLabs/CambAI) with auto-detection<br>• Speaker info generation in CSV format<br>• Real-time speaker detection<br>• Configurable chunk sizes for optimal performance | `python client/asd/app.py [options]` |
+| **ASD** | `client/asd/app.py` | ASD only | Detect active speakers in video | • Video processing for speaker detection<br>• Multi-format diarization input (flat, ElevenLabs/CambAI)<br>• Speaker info generation in CSV format<br>• Real-time speaker detection<br>• Configurable chunk sizes for optimal performance | `python client/asd/app.py [options]` |
 | **Demo Web App** | `client/demos` | Controller (full pipeline) | User-friendly interface for testing and demonstrations | • Web-based UI for file upload and processing<br>• Real-time progress monitoring<br>• Output preview and download<br>• Accessible via browser at `http://localhost:3000` | • Service is spun up from docker compose<br>• Open browser to `http://localhost:3000` for UI interface |
 
 ### Client Selection Guide
@@ -512,15 +470,15 @@ Each client is designed for specific use cases and can be used independently or 
 
 ### Shared Components
 
-#### Source Simulators (`source_simulators/`)
+#### Source / Sink Helpers (`source_sink/`)
 
-**Purpose**: Shared audio and video processing utilities
+**Purpose**: Shared audio and video source and sink utilities for file I/O
 
 - **Files**:
-  - `audio.py` - Audio source and sink simulators
-  - `video.py` - Video source and sink simulators
+  - `base.py` - Abstract base class for file simulators (`BaseFileSimulator`)
   - `file.py` - Generic file source simulator for non-WAV formats (e.g., MP3)
-  - `base.py` - Base classes for file simulators
+  - `grpc/audio.py` - Audio source and sink simulators (gRPC-coupled)
+  - `grpc/video.py` - Video source and sink simulators (gRPC-coupled)
 - **Use Case**: Used by all clients for standardized file I/O operations
 - **Features**:
   - WAV/MP3 audio processing
@@ -553,7 +511,7 @@ Mermaid sources are available in `docs/source/uml_mermaid/`.
 - Audio translation only
 - Real-time streaming with configurable chunks
 - Built-in latency analysis and performance monitoring
-- Support for WAV and MP3 formats (RIVA and ElevenLabs/CambAI)
+- Support for WAV and MP3 formats
 
 **LipSync Client Architecture**
 
@@ -580,7 +538,7 @@ Mermaid sources are available in `docs/source/uml_mermaid/`.
 Detailed sequence diagram showing:
 - Health checks for all services
 - Controller service orchestration
-- Audio processing pipeline (Controller → S2S → RIVA ASR/TTS)
+- Audio processing pipeline (Controller → S2S → ElevenLabs/CambAI)
 - Video processing pipeline (Controller → ASD → GPU/CPU fallback)
 - LipSync processing coordination
 - Error handling and fallback mechanisms
@@ -705,16 +663,6 @@ for audio_file in audio/*.wav; do
 done
 ```
 
-#### Performance Testing
-```bash
-# Test different chunk sizes with S2S client
-for chunk_size in 0.5 1.0 2.0 5.0; do
-    python client/s2s/latency_analysis.py \
-        --chunk-size-audio-secs "$chunk_size" \
-        --output-plot "s2s_latency_${chunk_size}s.png"
-done
-```
-
 #### Service Health Monitoring
 ```bash
 # Check all services are running
@@ -740,6 +688,10 @@ for addr, name in services:
 
 ## Configuration
 
+> The settings below summarize the most common options. The complete, canonical
+> configuration reference (all variables, types, and defaults) lives in
+> [docs/source/configuration.rst](docs/source/configuration.rst).
+
 ### Environment Variables
 
 #### Controller Service Configuration
@@ -758,16 +710,10 @@ The controller service supports various configuration options:
 
 **Controller Processing:**
 - ASD bypass a per-request option available via `bypass_asd=True` in `ContentLocalizationConfig` (LipSync uses internal face detection)
-- `CONTROLLER_INTERMEDIATE_AUDIO_FORMAT`: S2S output format used by controller (`MP3`/`WAV`)
 
 **Debug Configuration:**
 - `CONTROLLER_DEBUG_PORT`: VS Code debug port (default: `5678`)
 - `CONTROLLER_VS_CODE_DEBUG`: Enable VS Code debugging (default: `0`)
-
-**Enabling Profiling and Metric Tracker:**
-- `CONTROLLER_PROFILER`: Enable profiling framework (default: `0`)
-- `CONTROLLER_PROFILER_TYPE`: Select profiler type between yappi and cprofiler (default: `cprofiler`)
-- `CONTROLLER_METRIC_TRACKER`: Enable metric tracker (default: `0`)
 
 #### S2S Service Configuration
 
@@ -778,7 +724,7 @@ The controller service supports various configuration options:
 
 - `ASD_GRPC_API_PORT`: gRPC service port (default: `50055`)
 - `ASD_LOG_LEVEL`: Logging level (default: `INFO`)
-- `ASD_MODEL_PATH`: Path to ASD TensorRT models
+- `ASD_MODEL_MOUNT_PATH`: Host path mounted as the ASD NIM model cache
 
 #### Timeout and Polling Configuration
 
@@ -794,7 +740,6 @@ All timeout values are in seconds. See the full reference in the
 - `CONTROLLER_CLEANUP_TIMEOUT`: Thread cleanup timeout (default: `10.0`)
 
 **S2S:**
-- `S2S_CLEANUP_TIMEOUT`: Sub-pipeline thread cleanup timeout (default: `1.0`)
 - `S2S_EL_DUBBING_POLL_INTERVAL`: ElevenLabs dubbing status poll interval (default: `10`)
 - `S2S_EL_DUBBING_MAX_ATTEMPTS`: Max dubbing poll attempts (default: `120`)
 - `S2S_EL_KEEPALIVE_INTERVAL`: Keepalive ping interval during dubbing (default: `1`)
@@ -805,7 +750,7 @@ Configuration files are located in the `configs/` directory:
 
 - `configs/elevenlabs.env`: ElevenLabs S2S configuration
 - `configs/camb.env`: CambAI S2S configuration
-- `configs/riva.env`: RIVA S2S configuration
+- `configs/debug.env`: Developer profile — same knobs as `configs/elevenlabs.env` with debug-oriented values (`LIPSYNC_DEBUG_MODE=1`)
 
 ---
 
@@ -813,30 +758,37 @@ Configuration files are located in the `configs/` directory:
 
 ### Project Structure
 
+The tree below lists the top-level packages (not every file):
+
 ```
 .
-├── client/              # Client applications
+├── assets/             # Sample input media (audio/video) and diarization
+├── client/             # Client applications
 │   ├── asd/            # Active Speaker Detection client (app.py, args.py, config.py)
+│   ├── batch_processing/  # Batch pipeline runner over a directory of videos
+│   ├── common/         # Shared client helpers (timing, etc.)
 │   ├── controller/     # Controller orchestration client (app.py, args.py, config.py)
 │   ├── demos/          # Web demo application
-│   ├── direct/         # Direct processing client (app.py, args.py)
+│   ├── direct/         # Direct processing client (app.py, args.py, config.py, pipeline.py)
 │   ├── lipsync/        # LipSync client (app.py, args.py, config.py)
 │   └── s2s/            # Speech-to-Speech client (app.py, args.py, config.py)
 ├── configs/            # Service configuration files
 ├── dockerfiles/        # Dockerfiles for each service
 ├── docs/               # Sphinx documentation
+├── functional_tests/   # End-to-end functional tests (require running services)
 ├── protos/             # gRPC/Protobuf definitions
 ├── scripts/            # Utility and standalone scripts
-│   ├── deploy_*.sh     # Service deployment scripts
-│   ├── el_diarize.py   # ElevenLabs diarization generation
-│   ├── riva_parakeet_diarize.py  # RIVA Parakeet diarization generation
-│   ├── el_s2s_infer.py # ElevenLabs standalone dubbing
-│   └── camb_s2s_infer.py  # CAMB standalone dubbing
+│   ├── camb/           # Camb AI scripts (s2s_infer.py, diarize.py, audio_isolation.py)
+│   ├── docs/           # Documentation generators (CLI reference)
+│   ├── elevenlabs/     # ElevenLabs scripts (s2s_infer.py, diarize.py, audio_isolation.py, stem_separation.py)
+│   ├── functional_tests/  # Shell wrappers for functional test runs
+│   ├── nims/           # deploy_*.sh for ASD/LipSync NIMs and parity_test.sh
+│   ├── perf/           # Performance benchmarking scripts and reports
+│   └── misc/           # Dev/media utilities (setup_env.sh, convert_to_streamable_mp4.sh, etc.)
 ├── src/                # Service implementation
 │   ├── common/         # Shared utilities
 │   ├── controller_service/  # Controller service code
 │   ├── docker_entrypoints/  # Docker container entrypoints
-│   ├── profiler/       # Profiling and metrics tracking
 │   └── s2s_service/    # S2S service code
 ├── tests/              # Unit and integration tests
 └── volumes/            # Persistent data (models, cache, outputs)
@@ -936,6 +888,15 @@ python -m pytest functional_tests/test_controller_client.py -v
 python -m pytest functional_tests/test_s2s_client.py -v
 ```
 
+> **CambAI stacks:** the defaults use ElevenLabs-style language codes
+> (`en`, `es`). CambAI expects integer language IDs, so pass them explicitly,
+> otherwise the run fails with `Invalid CambAI source language ID: en`:
+>
+> ```bash
+> source .venv/bin/activate && python -m pytest functional_tests/ -v --require-services \
+>     --source-language 1 --target-language 54
+> ```
+
 **Prerequisites:**
 - All services running (S2S, ASD, LipSync, Controller)
 - Sample input files in `assets/`
@@ -963,14 +924,12 @@ cd ..
 **View Generated Documentation:**
 
 ```bash
-open build/html/index.html  # macOS
-xdg-open build/html/index.html  # Linux
+open build/docs/html/index.html  # macOS
+xdg-open build/docs/html/index.html  # Linux
 ```
 
 **Output Locations:**
 - HTML: `build/docs/html/index.html`
-- PDF: `build/docs/pdf/index.pdf`
-- EPUB: `build/docs/epub/index.epub`
 
 For documentation structure, maintenance guidelines see **[docs/README.md](docs/README.md)**
 
@@ -1007,11 +966,6 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-**Issue: RIVA models fail to download**
-- Verify your `NGC_API_KEY` is correct
-- Check network connectivity to NVIDIA NGC
-- Try pulling the docker/model using the deploy script in `scripts/deploy_asr_canary.sh` or `scripts/deploy_tts_zeroshot.sh`.
-
 **Issue: TensorRT engine build fails**
 - Verify CUDA and TensorRT versions match
 - Ensure sufficient disk space (>10GB free)
@@ -1027,12 +981,8 @@ The `scripts/` directory contains various utility scripts to help with developme
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `deploy_asr_canary.sh` | Deploy RIVA ASR with Canary model | `./scripts/deploy_asr_canary.sh` |
-| `deploy_asr_parakeet.sh` | Deploy RIVA ASR with Parakeet model | `./scripts/deploy_asr_parakeet.sh` |
-| `deploy_tts_multilingual.sh` | Deploy multilingual TTS service | `./scripts/deploy_tts_multilingual.sh` |
-| `deploy_tts_zeroshot.sh` | Deploy zero-shot TTS service | `./scripts/deploy_tts_zeroshot.sh` |
-| `deploy_lipsync.sh` | Deploy LipSync service | `./scripts/deploy_lipsync.sh` |
-| `deploy_asd.sh` | Deploy ASD NIM service | `./scripts/deploy_asd.sh` |
+| `deploy_lipsync.sh` | Deploy LipSync service | `./scripts/nims/deploy_lipsync.sh` |
+| `deploy_asd.sh` | Deploy ASD NIM service | `./scripts/nims/deploy_asd.sh` |
 
 These scripts download models and start individual services for verification before full deployment.
 
@@ -1040,15 +990,15 @@ These scripts download models and start individual services for verification bef
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `setup_env.sh` | Setup complete development environment | `./scripts/setup_env.sh` |
-| `copy_docker_logs.sh` | Copy Docker container logs to files | `./scripts/copy_docker_logs.sh [service]` |
+| `setup_env.sh` | Setup complete development environment | `./scripts/misc/setup_env.sh` |
+| `copy_docker_logs.sh` | Copy Docker container logs to files | `./scripts/misc/copy_docker_logs.sh [service]` |
 
 ### Media Processing Scripts
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `convert_to_streamable_mp4.sh` | Convert videos to streamable MP4 format | `./scripts/convert_to_streamable_mp4.sh input.mp4` |
-| `extract_audio_from_videos.sh` | Extract audio from video files | `./scripts/extract_audio_from_videos.sh <input_dir> <output_dir> [sample_rate] [channels]` |
+| `convert_to_streamable_mp4.sh` | Convert videos to streamable MP4 format | `./scripts/misc/convert_to_streamable_mp4.sh input.mp4` |
+| `extract_audio_from_videos.sh` | Extract audio from video files | `./scripts/misc/extract_audio_from_videos.sh <input_dir> <output_dir> [sample_rate] [channels]` |
 
 ### Script Details
 
@@ -1058,8 +1008,8 @@ Converts video files to MP4 format suitable for streaming with the `faststart` f
 
 **Usage:**
 ```bash
-./scripts/convert_to_streamable_mp4.sh input.mp4
-# Output: input-fs.mp4
+./scripts/misc/convert_to_streamable_mp4.sh input.mp4
+# Output: input_streamable.mp4
 ```
 
 **Features:**
@@ -1075,10 +1025,10 @@ Batch extract audio from all video files in a directory.
 **Usage:**
 ```bash
 # Basic usage with defaults (16kHz, mono, WAV)
-./scripts/extract_audio_from_videos.sh videos/ audio/
+./scripts/misc/extract_audio_from_videos.sh videos/ audio/
 
 # Custom parameters (44.1kHz, stereo, MP3)
-./scripts/extract_audio_from_videos.sh videos/ audio/ 44100 2 mp3
+./scripts/misc/extract_audio_from_videos.sh videos/ audio/ 44100 2 mp3
 ```
 
 **Arguments:**
@@ -1108,7 +1058,7 @@ Complete automated setup of the development environment. This script:
 
 **Usage:**
 ```bash
-./scripts/setup_env.sh [--no-docker] [--no-gpu] [--dev] [--docs]
+./scripts/misc/setup_env.sh [--no-docker] [--no-gpu] [--dev] [--docs]
 ```
 
 **Options:**
@@ -1128,11 +1078,11 @@ Copy logs from Docker containers to local files for debugging and sharing.
 **Usage:**
 ```bash
 # Copy all service logs
-./scripts/copy_docker_logs.sh
+./scripts/misc/copy_docker_logs.sh
 
 # Copy specific service logs
-./scripts/copy_docker_logs.sh s2s
-./scripts/copy_docker_logs.sh controller
+./scripts/misc/copy_docker_logs.sh s2s
+./scripts/misc/copy_docker_logs.sh controller
 ```
 
 **Output:** Logs saved to `./logs/` directory with filenames like `s2s.log`, `controller.log`, etc.
@@ -1143,16 +1093,16 @@ These scripts generate diarization data (speaker segmentation) from audio files,
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `el_diarize.py` | Generate diarization using ElevenLabs Scribe STT | `ELEVENLABS_API_KEY=<key> python scripts/el_diarize.py --input-file audio.wav` |
-| `riva_parakeet_diarize.py` | Generate diarization using RIVA Parakeet ASR NIM | `python scripts/riva_parakeet_diarize.py --input-file audio.wav --server localhost:50053` |
+| `scripts/elevenlabs/diarize.py` | Generate diarization using ElevenLabs Scribe STT | `ELEVENLABS_API_KEY=<key> python scripts/elevenlabs/diarize.py --input-file audio.wav` |
+| `scripts/camb/diarize.py` | Generate source-language diarization using Camb AI | `CAMB_API_KEY=<key> python scripts/camb/diarize.py --input-file audio.wav` |
 
-#### el_diarize.py
+#### scripts/elevenlabs/diarize.py
 
 Generate diarization data using the ElevenLabs Speech-to-Text (Scribe) API. Outputs native ElevenLabs STT JSON format.
 
 **Usage:**
 ```bash
-ELEVENLABS_API_KEY=<key> python scripts/el_diarize.py \
+ELEVENLABS_API_KEY=<key> python scripts/elevenlabs/diarize.py \
     --input-file audio.wav \
     --output-file diarization.json
 ```
@@ -1163,31 +1113,10 @@ ELEVENLABS_API_KEY=<key> python scripts/el_diarize.py \
 - `--language-code` - Language code (default: auto-detect)
 - `--max-speakers` - Maximum number of speakers (default: model default)
 - `--model-id` - Scribe model ID (default: `scribe_v2`)
+- `--tag-audio-events` - Tag audio events such as (laughter) or (footsteps) in the transcript (flag, default off)
 
 **Requirements:**
 - `ELEVENLABS_API_KEY` environment variable
-
-#### riva_parakeet_diarize.py
-
-Generate diarization data using RIVA Parakeet ASR NIM. Outputs native RIVA offline_recognize JSON format.
-
-**Usage:**
-```bash
-python scripts/riva_parakeet_diarize.py \
-    --input-file audio.wav \
-    --output-file diarization.json \
-    --server localhost:50053
-```
-
-**Arguments:**
-- `--input-file` - Path to audio file (WAV) (required)
-- `--output-file` - Path to output JSON file (default: `diarization.json`)
-- `--server` - RIVA ASR server address (default: `localhost:50053`)
-- `--language-code` - Language code (default: `en-US`)
-- `--max-speakers` - Maximum number of speakers (default: `4`)
-
-**Requirements:**
-- Running RIVA Parakeet ASR NIM (deploy with `./scripts/deploy_asr_parakeet.sh`)
 
 ### Standalone Dubbing Scripts
 
@@ -1195,42 +1124,63 @@ These scripts perform end-to-end dubbing outside of the gRPC service pipeline, u
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `el_s2s_infer.py` | ElevenLabs end-to-end dubbing | `ELEVENLABS_API_KEY=<key> python scripts/el_s2s_infer.py --input-file video.mp4 --source-language-code en --target-language-code es -o output.wav` |
-| `camb_s2s_infer.py` | CAMB end-to-end dubbing (URL-based) | `CAMB_API_KEY=<key> python scripts/camb_s2s_infer.py --input-url <url> --source-language 1 --target-language 54 -o output.mp3` |
-| `invoke_11labs_e2e.sh` | Wrapper for ElevenLabs E2E dubbing | `./scripts/invoke_11labs_e2e.sh` |
-| `invoke_camb_e2e.sh` | Wrapper for CAMB E2E dubbing | `./scripts/invoke_camb_e2e.sh` |
+| `scripts/elevenlabs/s2s_infer.py` | ElevenLabs end-to-end dubbing | `ELEVENLABS_API_KEY=<key> python scripts/elevenlabs/s2s_infer.py --input-file assets/sample_audio.wav --source-language-code en --target-language-code es -o output.wav` |
+| `scripts/camb/s2s_infer.py` | CAMB end-to-end dubbing | `CAMB_API_KEY=<key> python scripts/camb/s2s_infer.py --input-file assets/sample_audio.wav --source-language 1 --target-language 54 -o output.mp3` |
+| `scripts/elevenlabs/invoke_e2e.sh` | Wrapper for ElevenLabs E2E dubbing | `./scripts/elevenlabs/invoke_e2e.sh` |
+| `scripts/camb/invoke_e2e.sh` | Wrapper for CAMB E2E dubbing | `./scripts/camb/invoke_e2e.sh` |
 
-#### el_s2s_infer.py
+#### scripts/elevenlabs/s2s_infer.py
 
 Invoke ElevenLabs end-to-end dubbing for local media files. Extracts audio from video, submits a dubbing request, and downloads the translated audio.
 
 **Usage:**
 ```bash
-ELEVENLABS_API_KEY=<key> python scripts/el_s2s_infer.py \
-    --input-file video.mp4 \
+ELEVENLABS_API_KEY=<key> python scripts/elevenlabs/s2s_infer.py \
+    --input-file assets/sample_audio.wav \
     --source-language-code en \
     --target-language-code es \
-    --output-file output.wav
+    --output-file output.wav \
+    --source-transcript-output-file source_transcript.json \
+    --target-transcript-output-file target_transcript.json \
+    --transcript-format json
 ```
+
+Transcript outputs are optional. ElevenLabs supports `json`, `srt`, and `webvtt` formats;
+`vtt` is accepted as an alias for `webvtt`. Use ElevenLabs Dubbing API JSON outputs
+as ASD, Controller, or Direct diarization inputs with
+`--diarization-format elevenlabs-dubbing-api`. See
+[docs/source/diarization_formats.rst](docs/source/diarization_formats.rst) for the
+full list of supported diarization formats and their schemas.
 
 **Requirements:**
 - `ELEVENLABS_API_KEY` environment variable
 - `ffmpeg` installed (for video-to-audio extraction)
 
-#### camb_s2s_infer.py
+#### scripts/camb/s2s_infer.py
 
-Invoke CAMB end-to-end dubbing for URL-based media. Submits a dubbing request, polls for completion, and downloads the translated audio.
+Invoke CAMB end-to-end dubbing for a local file or a public media URL. Submits a dubbing request, polls for completion, and downloads the translated audio. Pass exactly one of `--input-file` (uploaded via CAMB's `/files/upload-url` endpoint, requires the Files API to be enabled on your CAMB account) or `--input-url` (public media URL sent as `video_url`).
 
 CAMB.AI uses **integer language IDs** (e.g. `1` = English, `54` = Spanish). To get the full mapping, query the CambAI API or see the [source languages](https://docs.camb.ai/api-reference/endpoint/get-source-languages) and [target languages](https://docs.camb.ai/api-reference/endpoint/get-target-languages) docs.
 
 **Usage:**
 ```bash
-CAMB_API_KEY=<key> python scripts/camb_s2s_infer.py \
-    --input-url "https://example.com/media.mp3" \
+CAMB_API_KEY=<key> python scripts/camb/s2s_infer.py \
+    --input-file assets/sample_audio.wav \
     --source-language 1 \
     --target-language 54 \
-    --output-file output.mp3
+    --output-file output.mp3 \
+    --target-transcript-output-file target_transcript.json \
+    --transcript-format json
 ```
+
+Transcript outputs are optional and are always in the **target** language —
+CAMB's dubbing API does not return a source-language transcript. JSON
+writes the target-language diarized transcript from the `dub-result`
+payload, and `txt`, `srt`, and `vtt` come from CAMB's formatted transcript
+endpoint (also keyed on the target language). These can be passed to
+clients with `--diarization-format camb` when target-language diarization
+is acceptable. For source-language CAMB diarization (e.g. as ASD input),
+use `scripts/camb/diarize.py` (Camb AI Transcription API).
 
 **Requirements:**
 - `CAMB_API_KEY` environment variable
@@ -1241,7 +1191,7 @@ Deploy the Active Speaker Detection (ASD) NIM container for standalone testing.
 
 **Usage:**
 ```bash
-./scripts/deploy_asd.sh
+./scripts/nims/deploy_asd.sh
 ```
 
 **Features:**
@@ -1251,77 +1201,3 @@ Deploy the Active Speaker Detection (ASD) NIM container for standalone testing.
 - Requires `ASD_API_KEY` environment variable
 
 ---
-
-## Performance Analysis Tools
-
-The controller service includes built-in profiling and metrics tracking capabilities to analyze performance bottlenecks and monitor system behavior.
-
-### Profiling and Metric Tracking
-
-Profile controller service execution to identify performance bottlenecks and optimize code paths.
-
-**Step 1: Enable Profiling and Metrics**
-
-```bash
-# Add to .env file or export
-export CONTROLLER_PROFILER=1
-export CONTROLLER_METRIC_TRACKER=1
-```
-
-**Step 2: Run Service**
-
-```bash
-docker compose --env-file .env --env-file configs/elevenlabs.env --profile controller-third-party-s2s up --build
-```
-
-**Step 3: Send Request**
-
-In a new terminal window, activate the virtual environment as described in [Prerequisites](#prerequisites) section. Execute controller client to send request.
-
-```bash
-python3 client/controller/app.py
-```
-
-Following file structure will be generated.
-
-```
-volumes/profiler/
-├── YYYY-MM-DD_HH-MM-SS/infer_<uuid>/
-│   ├── profile_overall.prof         # For SnakeViz
-│   ├── profile_thread_N.prof        # Per-thread (yappi only)
-│   └── profile_trace.json           # For Chrome Tracing
-├── raw_data_<timestamp>/
-│   ├── lipsync_request.csv          # Per-metric timestamps
-│   └── ...
-└── metrics_<timestamp>              # Aggregated statistics
-```
-
-**Step 4: Visualize Results**
-
-**Profiling (SnakeViz or Chrome):**
-
-```bash
-# Option 1: SnakeViz (hierarchical view)
-snakeviz volumes/profiler/YYYY-MM-DD_HH-MM-SS/infer_<uuid>/profile_overall.prof
-```
-Default browser will open with an interactive visualization of pstats.
-
-```bash
-# Option 2: Chrome Tracing (timeline view)
-# 1. Open chrome://tracing
-# 2. Load volumes/profiler/YYYY-MM-DD_HH-MM-SS/infer_<uuid>/profile_trace.json
-```
-**Metrics (plot_metrics.py):**
-
-```bash
-
-# Generate plots for all metrics
-python3 client/utilities/plot_metrics.py volumes/profiler/raw_data_2025-10-29_09-23-02/ -o outputs/metrics_plots/
-```
-This will generate `outputs/metrics_plots/<metric_name>.png` (per-metric timeline) and
-`outputs/metrics_plots/metric_comparison.png` (combined timeline of all events).
-
----
-
-**For detailed profiling documentation, advanced configuration, and troubleshooting, see [Profiling Guide](docs/source/profiling.rst)**
-

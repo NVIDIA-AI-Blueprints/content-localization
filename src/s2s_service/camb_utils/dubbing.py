@@ -13,20 +13,18 @@ import queue
 import tempfile
 import threading
 import traceback
-import wave
 from collections.abc import Iterator
 from pathlib import Path
 from queue import Empty as QueueEmpty
 
 import grpc
-import soundfile as sf
 from google.protobuf.empty_pb2 import Empty
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechRequest
 from nvidia.ai4m.s2s.v1.s2s_pb2 import SpeechToSpeechResponse
 
-from base_utils import logger
+from common.base_utils import logger
 from s2s_service.camb_utils.api import download_output_audio_to_file
-from s2s_service.camb_utils.api import get_output_audio_url
+from s2s_service.camb_utils.api import get_alt_format_output_audio_url
 from s2s_service.camb_utils.api import submit_dub_task
 from s2s_service.camb_utils.api import upload_local_file
 from s2s_service.camb_utils.api import wait_for_completion
@@ -123,33 +121,6 @@ SUPPORTED_SOURCE_LANGUAGES = [
 SUPPORTED_TARGET_LANGUAGES = SUPPORTED_SOURCE_LANGUAGES.copy()
 
 
-def _convert_flac_to_wav(flac_path: Path) -> Path:
-    """Convert a FLAC file to WAV using soundfile.
-
-    CambAI always outputs FLAC regardless of input format. This helper
-    converts the downloaded FLAC to WAV so downstream consumers
-    (LipSync) always receive a standard WAV container.
-
-    Args:
-        flac_path (Path): Path to the FLAC audio file.
-
-    Returns:
-        Path: Path to the converted WAV file.
-
-    Raises:
-        RuntimeError: If the conversion fails.
-
-    Examples:
-        >>> _convert_flac_to_wav(Path("/tmp/dubbed.flac"))
-        PosixPath('/tmp/dubbed.wav')
-    """
-    wav_path = flac_path.with_suffix(".wav")
-    data, sample_rate = sf.read(str(flac_path))
-    sf.write(str(wav_path), data=data, samplerate=sample_rate, subtype="PCM_16")
-    logger.info(f"Converted FLAC to WAV: {wav_path}")
-    return wav_path
-
-
 def _run_camb_pipeline(
     input_path: str,
     request_id: str,
@@ -161,12 +132,11 @@ def _run_camb_pipeline(
     chosen_dictionaries: list[int] | None = None,
     ai_optimization: bool = True,
 ) -> None:
-    """Execute the full CambAI upload → dub → download → convert pipeline.
+    """Execute the full CambAI upload → dub → MP3 alt-format download pipeline.
 
-    Runs on a background thread. Downloads the FLAC output from CambAI,
-    converts it to WAV, then enqueues ``SpeechToSpeechResponse`` chunks
-    followed by a ``"completed"`` sentinel, or an ``("error", detail)``
-    tuple on failure.
+    Runs on a background thread. Requests CambAI MP3 alt-format output,
+    downloads it, then enqueues ``SpeechToSpeechResponse`` chunks followed by
+    a ``"completed"`` sentinel, or an ``("error", detail)`` tuple on failure.
 
     Args:
         input_path (str): Path to the input audio file.
@@ -225,11 +195,11 @@ def _upload_dub_and_download(
     chosen_dictionaries: list[int] | None = None,
     ai_optimization: bool = True,
 ) -> Path:
-    """Upload file, submit dub, poll, download FLAC, convert to WAV.
+    """Upload file, submit dub, poll, and download MP3 alt-format output.
 
-    CambAI always outputs FLAC regardless of input format. This
-    function downloads the FLAC result and converts it to WAV so
-    downstream consumers always receive a standard WAV container.
+    CambAI's default dubbing result is not used directly. This function
+    requests the alt-format API with ``output_format="mp3"`` so downstream
+    consumers receive the same container as the ElevenLabs S2S path.
 
     Args:
         input_path (str): Local audio file path to upload.
@@ -243,11 +213,11 @@ def _upload_dub_and_download(
             Defaults to ``True``.
 
     Returns:
-        Path: Path to the converted WAV audio file.
+        Path: Path to the downloaded MP3 audio file.
 
     Examples:
         >>> _upload_dub_and_download("/tmp/in.wav", "r1", "1", "54", h)
-        PosixPath('/tmp/tmpXXXX.wav')
+        PosixPath('/tmp/tmpXXXX.mp3')
     """
     logger.debug(f"Uploading to CambAI for request id {request_id}")
     file_id = upload_local_file(file_path=Path(input_path), headers=headers)
@@ -266,49 +236,40 @@ def _upload_dub_and_download(
     run_id = wait_for_completion(task_id=task_id, headers=headers)
     logger.info(f"CambAI dubbing completed run_id={run_id}")
 
-    audio_url = get_output_audio_url(run_id=run_id, headers=headers)
+    audio_url = get_alt_format_output_audio_url(
+        run_id=run_id,
+        language=target_language,
+        headers=headers,
+        output_format="mp3",
+    )
 
-    # CambAI always returns FLAC — download then convert to WAV
-    with tempfile.NamedTemporaryFile(suffix=".flac", delete=False, dir="/tmp") as flac_tmp:
-        flac_path = Path(flac_tmp.name)
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False, dir="/tmp") as mp3_tmp:
+        mp3_path = Path(mp3_tmp.name)
 
-    download_output_audio_to_file(audio_url=audio_url, output_file=flac_path)
-    flac_size = os.path.getsize(flac_path)
-    logger.info(f"Downloaded dubbed FLAC: {flac_size} bytes")
-
-    wav_path = _convert_flac_to_wav(flac_path)
-    # Clean up intermediate FLAC file
-    os.remove(flac_path)
-    wav_size = os.path.getsize(wav_path)
-    logger.info(f"Converted WAV: {wav_size} bytes")
-    return wav_path
+    download_output_audio_to_file(audio_url=audio_url, output_file=mp3_path)
+    mp3_size = os.path.getsize(mp3_path)
+    logger.info(f"Downloaded dubbed MP3: {mp3_size} bytes")
+    return mp3_path
 
 
 def _enqueue_audio_chunks(
     dubbed_audio_path: Path,
     audio_queue: queue.Queue,
 ) -> None:
-    """Read a WAV file in 8 KB chunks and enqueue as responses.
+    """Read an MP3 file in 8 KB chunks and enqueue as responses.
 
-    Reads sample rate and channel count from the WAV header and
-    populates ``audio_sample_rate`` / ``audio_num_channels`` on
-    every ``SpeechToSpeechResponse`` so downstream consumers
-    (LipSync) receive accurate audio metadata.
+    The MP3 container carries its own audio metadata, so only ``audio_data`` and
+    ``audio_format`` are populated on each ``SpeechToSpeechResponse``.
 
     Args:
-        dubbed_audio_path (Path): Path to the converted WAV file.
+        dubbed_audio_path (Path): Path to the MP3 file.
         audio_queue (queue.Queue): Queue to put chunks into.
 
     Examples:
-        >>> _enqueue_audio_chunks(Path("/tmp/out.wav"), q)
+        >>> _enqueue_audio_chunks(Path("/tmp/out.mp3"), q)
     """
-    with wave.open(str(dubbed_audio_path), "rb") as wf:
-        sample_rate = wf.getframerate()
-        n_channels = wf.getnchannels()
-    logger.info(f"WAV properties: sample_rate={sample_rate}, n_channels={n_channels}")
-
     chunk_count = 0
-    with open(dubbed_audio_path, "rb") as f:
+    with dubbed_audio_path.open("rb") as f:
         while True:
             chunk = f.read(8192)
             if not chunk:
@@ -317,12 +278,10 @@ def _enqueue_audio_chunks(
             logger.debug(f"Read chunk {chunk_count}: {len(chunk)} bytes")
             response = SpeechToSpeechResponse(
                 audio_data=chunk,
-                audio_format="wav",
-                audio_sample_rate=sample_rate,
-                audio_num_channels=n_channels,
+                audio_format="mp3",
             )
             audio_queue.put(response)
-    logger.info(f"Finished reading WAV file: {chunk_count} chunks total")
+    logger.info(f"Finished reading MP3 file: {chunk_count} chunks total")
 
 
 def _extract_languages(
@@ -392,8 +351,8 @@ class CambDubbingService(S2SService):
     """Speech-to-Speech service using CambAI direct dubbing API.
 
     Transactional only — collects all input audio, uploads to CambAI,
-    polls for completion, converts the FLAC output to WAV, then
-    streams the dubbed WAV back.
+    polls for completion, requests MP3 alt-format output, then streams
+    the dubbed MP3 back.
 
     .. code-block:: text
 
@@ -418,8 +377,8 @@ class CambDubbingService(S2SService):
           |       |-- Background thread: _run_camb_pipeline() -------.
           |       |   upload_local_file() → submit_dub_task()        |
           |       |   → wait_for_completion()                        |
-          |       |   → get_output_audio_url()                       |
-          |       |   → download FLAC → convert to WAV               |
+          |       |   → get_alt_format_output_audio_url()            |
+          |       |   → download MP3                                 |
           |       |   → enqueue SpeechToSpeechResponse chunks        |
           |       |   + "completed" sentinel                         |
           |       |                                                  |
@@ -433,19 +392,19 @@ class CambDubbingService(S2SService):
     """
 
     def validate_audio_format(self, value: str) -> bool:
-        """Validate the audio format. CambAI always outputs WAV.
+        """Validate the audio format. CambAI outputs MP3 via alt-format API.
 
         Args:
             value (str): The audio format string.
 
         Returns:
-            bool: ``True`` if the format is ``"wav"``.
+            bool: ``True`` if the format is ``"mp3"``.
 
         Examples:
-            >>> service.validate_audio_format("wav")
+            >>> service.validate_audio_format("mp3")
             True
         """
-        return value == "wav"
+        return value == "mp3"
 
     def __init__(
         self,
@@ -453,7 +412,7 @@ class CambDubbingService(S2SService):
         sample_rate_hz: int = 16000,
         default_source_language: str = "1",
         default_target_language: str = "54",
-        audio_format: str = "wav",
+        audio_format: str = "mp3",
     ) -> None:
         """Initialize the CambAI dubbing S2S service.
 
@@ -465,7 +424,7 @@ class CambDubbingService(S2SService):
                 Defaults to ``"1"`` (English).
             default_target_language (str): Default CambAI target language ID.
                 Defaults to ``"54"`` (Spanish).
-            audio_format (str): Output audio format. Defaults to ``"wav"``.
+            audio_format (str): Output audio format. Defaults to ``"mp3"``.
 
         Raises:
             RuntimeError: If ``CAMB_API_KEY`` environment variable is not set.
@@ -738,7 +697,7 @@ class CambDubbingService(S2SService):
 
         Examples:
             >>> service._collect_input_audio(iter_, ctx, "req-1")
-            '/tmp/tmpXXXX.wav'
+            '/tmp/tmpXXXX.mp3'
         """
         try:
             input_path = self.download_input_audio(

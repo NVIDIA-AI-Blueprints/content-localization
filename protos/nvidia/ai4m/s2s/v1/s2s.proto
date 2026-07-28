@@ -7,183 +7,7 @@ syntax = "proto3";
 
 package nvidia.ai4m.s2s.v1;
 
-import "nvidia/ai4m/audio/v1/audio.proto";
 import "google/protobuf/empty.proto";
-
-// ---------------------------------------------------------------------------
-// Streaming audio types (used only by S2S)
-// Inlined from the old nvidia.audio.v1 shared proto since only S2S uses them.
-// ---------------------------------------------------------------------------
-
-// Possible streaming audio codecs
-enum StreamingAudioEncoding {
-  STREAMING_AUDIO_ENCODING_UNSPECIFIED = 0;
-  // PCM
-  STREAMING_AUDIO_ENCODING_RAW = 1;
-  STREAMING_AUDIO_ENCODING_OPUS = 2;
-}
-
-// Configuration which describes streaming Audio properties
-message StreamingAudioConfig {
-  // Required: The audio codec
-  StreamingAudioEncoding encoding = 1;
-
-  // Required: The sample rate of audio
-  // For example: 16000, 48000 etc.
-  uint32 sample_rate_hz = 2;
-
-  // The audio codec config
-  oneof encoding_config {
-    // The configuration which describes the codec setting which are
-    // required for a decoder to know. This is set when
-    // StreamingAudioConfig corresponds to input audio.
-    AudioDecoderConfig decoder_config = 3;
-
-    // The configuration describing the codec setting which are
-    // required for an encoder to know. This is set when
-    // StreamingAudioConfig corresponds to output audio.
-    AudioEncoderConfig encoder_config = 4;
-  }
-
-  // The Number of audio channels
-  uint32 channels = 5;
-
-  // The Audio channel mask (bitmask to represent channel configuration).
-  ChannelMask channel_mask = 6;
-
-  // The audio layout
-  AudioLayout layout = 7;
-
-  // The audio chunk duration in milliseconds. When client sends
-  // fixed duration frames this value helps NIM for decision making.
-  uint32 chunk_duration_ms = 8;
-}
-
-// The configuration which describes the codec setting which are
-// required for a decoder to know.
-message AudioDecoderConfig {
-  oneof decoder_config {
-    // Decoder Configuration for STREAMING_AUDIO_ENCODING_RAW
-    RawDecoderConfig raw_dec_config = 1;
-
-    // Decoder Configuration for STREAMING_AUDIO_ENCODING_OPUS
-    OpusDecoderConfig opus_dec_config = 2;
-  }
-}
-
-// Decoder Configuration for STREAMING_AUDIO_ENCODING_RAW
-message RawDecoderConfig {
-  // Required: The Audio sample Format.
-  nvidia.ai4m.audio.v1.AudioFormat format = 1;
-}
-
-// Decoder Configuration for STREAMING_AUDIO_ENCODING_OPUS
-message OpusDecoderConfig {
-  // Opus codec Packet loss recovery mechanism.
-  OpusLossRecoveryMode loss_recovery_mode = 1;
-}
-
-// The configuration describing the codec setting which are
-// required for an encoder to know.
-message AudioEncoderConfig {
-  oneof encoder_config {
-    // Encoder Configuration for STREAMING_AUDIO_ENCODING_RAW
-    RawEncoderConfig raw_enc_config = 1;
-
-    // Encoder Configuration for STREAMING_AUDIO_ENCODING_OPUS
-    OpusEncoderConfig opus_enc_config = 2;
-  }
-}
-
-// Encoder Configuration for STREAMING_AUDIO_ENCODING_RAW
-message RawEncoderConfig {
-  // Required: The Audio sample Format.
-  nvidia.ai4m.audio.v1.AudioFormat format = 1;
-}
-
-// Encoder Configuration for STREAMING_AUDIO_ENCODING_OPUS
-message OpusEncoderConfig {
-  // Bitrate (bytes of audio data per second).
-  uint32 bitrate = 1;
-
-  // Set if output receiver to leverage FEC (forward error correction)
-  // feature of opus encoder.
-  bool use_inband_fec = 2;
-}
-
-// The Audio channel masks (bitmask to represent channel configuration).
-enum ChannelMask {
-  CHANNEL_MASK_UNSPECIFIED = 0;
-
-  // Mask for front left audio channel.
-  CHANNEL_MASK_FRONT_LEFT = 0x1;
-
-  // Mask for front right audio channel.
-  CHANNEL_MASK_FRONT_RIGHT = 0x2;
-
-  // Mask for binaural configuration.
-  // CHANNEL_MASK_FRONT_LEFT | CHANNEL_MASK_FRONT_RIGHT
-  CHANNEL_MASK_2POINT0 = 0x3;
-
-  // Mask for front center audio channel.
-  CHANNEL_MASK_FRONT_CENTER = 0x4;
-
-  // Mask for low frequency audio channel.
-  CHANNEL_MASK_LOW_FREQUENCY = 0x8;
-
-  // Mask for back left audio channel.
-  CHANNEL_MASK_BACK_LEFT = 0x10;
-
-  // Mask for back right audio channel.
-  CHANNEL_MASK_BACK_RIGHT = 0x20;
-
-  // Mask for quad configuration.
-  // CHANNEL_MASK_2POINT0 | CHANNEL_MASK_BACK_LEFT
-  //   | CHANNEL_MASK_BACK_RIGHT
-  CHANNEL_MASK_QUAD = 0x33;
-
-  // Mask for 5.1 configuration.
-  // CHANNEL_MASK_QUAD | CHANNEL_MASK_FRONT_CENTER
-  //   | CHANNEL_MASK_LOW_FREQUENCY
-  CHANNEL_MASK_5POINT1 = 0x3f;
-
-  // Mask for front left of center audio channel.
-  CHANNEL_MASK_FRONT_LEFT_OF_CENTER = 0x40;
-
-  // Mask for front right of center audio channel.
-  CHANNEL_MASK_FRONT_RIGHT_OF_CENTER = 0x80;
-
-  // Mask for 7.1 configuration.
-  // CHANNEL_MASK_5POINT1 | CHANNEL_MASK_FRONT_LEFT_OF_CENTER
-  //   | CHANNEL_MASK_FRONT_RIGHT_OF_CENTER
-  CHANNEL_MASK_7POINT1 = 0xff;
-}
-
-// Possible Audio layouts
-enum AudioLayout {
-  AUDIO_LAYOUT_UNSPECIFIED = 0;
-  AUDIO_LAYOUT_INTERLEAVED = 1;
-  AUDIO_LAYOUT_NON_INTERLEAVED = 2;
-}
-
-// Possible values for Opus Packet loss recovery mechanisms
-enum OpusLossRecoveryMode {
-  OPUS_LOSS_RECOVERY_MODE_UNSPECIFIED = 0;
-
-  // This option should be used if no concealment is desired.
-  OPUS_LOSS_RECOVERY_MODE_NONE = 1;
-
-  // Use packet loss concealment (PLC).
-  OPUS_LOSS_RECOVERY_MODE_PLC = 2;
-
-  // Use in-band forward error correction.
-  // Enabling FEC enables PLC as well.
-  OPUS_LOSS_RECOVERY_MODE_FEC = 3;
-}
-
-// ---------------------------------------------------------------------------
-// S2S service and messages
-// ---------------------------------------------------------------------------
 
 // Configuration message for S2S service
 message SpeechToSpeechConfig {
@@ -198,7 +22,7 @@ message SpeechToSpeechConfig {
   // the first 10 seconds of input audio as the voice reference
   optional string voice_name = 3;
 
-  // ElevenLabs dubbing parameters (ignored by RIVA backends)
+  // ElevenLabs dubbing parameters (ignored by non-ElevenLabs backends)
 
   // Number of speakers to detect. 0 = auto-detect (ElevenLabs API default).
   optional int32 elevenlabs_num_speakers = 4;
@@ -240,48 +64,55 @@ service SpeechToSpeech {
   rpc StreamSpeechToSpeech(stream SpeechToSpeechRequest) returns (stream SpeechToSpeechResponse) {}
 }
 
-// TODO: Need to add configuration RPCs and messages for setting up speaker portrait etc.
-
-// S2S message containing audio data and metadata
+// S2S request stream message.
+//
+// The configuration is sent as the first message of the stream; subsequent
+// messages carry audio data. The audio metadata fields describe the
+// accompanying audio_data payload.
 message SpeechToSpeechRequest {
-  // Raw audio data
-  optional bytes audio_data = 1;
+  reserved 2;
+  // Field 7 is reserved (was audio_config).
+  reserved 7;
+  reserved "audio_config";
+
+  oneof payload {
+    // Raw audio data
+    bytes audio_data = 1;
+
+    // Configuration for S2S service (sent as the first message)
+    SpeechToSpeechConfig config = 6;
+  }
 
   // Sample rate of the audio (default: 16000)
-  optional int32 audio_sample_rate = 3; // default: 16000
+  optional int32 audio_sample_rate = 3;
 
   // Number of channels (1 for mono, 2 for stereo) (default: 1)
-  optional int32 audio_num_channels = 4; // default: 1
+  optional int32 audio_num_channels = 4;
 
-  // Audio format (e.g., "WAV", "LINEAR_PCM", "MP#") (default: "LINEAR_PCM")
-  optional string audio_format = 5; // default: "LINEAR_PCM"
-
-  // Configuration for S2S service (should be sent as first message)
-  optional SpeechToSpeechConfig config = 6;
-
-  // Optionally adding audio config parmaters
-  // TODO: This needs to be added to an inference config at the begining of inference instead
-  // of during request. Adding this is going to require a change to the service itself
-  // and will be taken up in the future.
-  optional StreamingAudioConfig audio_config = 7;
-
-  // TODO: Need to add inference configurations in the future.
+  // Audio format of audio_data (e.g., "WAV", "MP3") (default: "WAV")
+  optional string audio_format = 5;
 }
 
-// S2S message containing audio data and metadata
+// S2S response stream message.
+//
+// The audio metadata fields describe the accompanying audio_data payload.
 message SpeechToSpeechResponse {
-  // Raw audio data
-  optional bytes audio_data = 1;
+  reserved 2, 3;
+
+  oneof payload {
+    // Raw audio data
+    bytes audio_data = 1;
+
+    // Empty message used to maintain connection (keep-alive)
+    google.protobuf.Empty keepalive = 7;
+  }
 
   // Sample rate of the audio (default: 16000)
-  optional int32 audio_sample_rate = 4; // default: 16000
+  optional int32 audio_sample_rate = 4;
 
   // Number of channels (1 for mono, 2 for stereo) (default: 1)
-  optional int32 audio_num_channels = 5; // default: 1
+  optional int32 audio_num_channels = 5;
 
-  // Audio format (e.g., "wav", "pcm") (default: "mp3")
-  optional string audio_format = 6; // default: "mp3"
-
-  // Empty message used to maintain connection (keep-alive)
-  optional google.protobuf.Empty keepalive = 7;
+  // Audio format of audio_data (e.g., "WAV", "MP3") (default: "MP3")
+  optional string audio_format = 6;
 }
