@@ -1,0 +1,541 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Registry and inference secrets (repository Actions secrets):
+# NGC_API_KEY: pulls the private QA image and NVIDIA NIM images from nvcr.io.
+# LIPSYNC_API_KEY: authenticates the LipSync NIM with NVIDIA NGC.
+# ASD_API_KEY: authenticates the Active Speaker Detection NIM with NVIDIA NGC.
+# CAMB_API_KEY: authenticates CambAI speech-to-speech requests.
+# ELEVENLABS_API_KEY: authenticates ElevenLabs speech-to-speech requests.
+#
+# Slack notifications:
+# SLACK_BOT_OAUTH_TOKEN (secret): bot token with chat:write and channel access.
+# BLUEPRINT_QA_SLACK_CHANNEL (variable): channel name or ID; default #vrdc-bpqa-monitoring.
+# BLUEPRINT_QA_DISABLE_SLACK (variable): set to true to mute notifications.
+# slack_channel (dispatch input): overrides the repository channel for one run.
+#
+# Test image and artifacts:
+# BLUEPRINT_QA_IMAGE (variable): overrides the default bundled Blueprint QA image.
+# BLUEPRINT_QA_INCLUDE_OUTPUT_VIDEOS (variable): true includes generated MP4s; default false.
+# include_output_videos (boolean dispatch input): explicitly includes/excludes MP4s for that run.
+# HTML, JSON, JUnit, and log reports are always uploaded; devtest.html supplies the run summary.
+# The QA image must include the tests, Poetry, Python 3.12, and installed dependencies.
+#
+# Runner requirements:
+# runs-on: arc-runners-org-nvidia-ai-bp-2-gpu-l40; dedicated Ubuntu GPU runner.
+# Docker >= 24 and Compose v2 must use NVIDIA Container Toolkit and video driver libraries.
+# RTX, L40, or L40S GPUs need sufficient memory for both NIMs; A100/H100 are unsupported.
+
+name: Blueprint QA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      include_output_videos:
+        description: Include generated output videos in the run artifacts
+        type: boolean
+        default: false
+      slack_channel:
+        description: Slack channel name or ID (blank uses the repository default)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# Keep a separate concurrency group per branch or PR, and let active runs
+# finish teardown. The single GPU runner serializes test execution across refs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  blueprint-qa:
+    # Fork PRs cannot access the registry/provider secrets or the trusted runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: arc-runners-org-nvidia-ai-bp-2-gpu-l40
+    timeout-minutes: 360
+    outputs:
+      test_counts: ${{ steps.summary.outputs.test_counts }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      QA_IMAGE: ${{ vars.BLUEPRINT_QA_IMAGE || 'nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image:latest' }}
+      QA_CONTAINER: pytest_runner
+      INCLUDE_OUTPUT_VIDEOS: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_output_videos) || (github.event_name != 'workflow_dispatch' && vars.BLUEPRINT_QA_INCLUDE_OUTPUT_VIDEOS == 'true') }}
+      # The QA fixtures derive the Compose project name from this directory name.
+      CONTENT_LOCALIZATION_REPO: ${{ github.workspace }}/content-localization-${{ github.run_id }}-${{ github.run_attempt }}
+      QA_REPORTS: ${{ github.workspace }}/blueprint-qa-${{ github.run_id }}-${{ github.run_attempt }}/reports
+      DOCKER_CONFIG: ${{ github.workspace }}/blueprint-qa-${{ github.run_id }}-${{ github.run_attempt }}/docker
+
+    steps:
+      - name: Ensure runner tools are available
+        timeout-minutes: 5
+        run: |
+          # Checkout needs Git LFS; reporting uses Python's standard library.
+          if ! command -v git-lfs >/dev/null || ! command -v python3 >/dev/null; then
+            elevate=()
+            if [[ "$(id -u)" != 0 ]]; then
+              elevate=(sudo -n)
+            fi
+            "${elevate[@]}" apt-get update
+            "${elevate[@]}" apt-get install -y --no-install-recommends git-lfs python3
+          fi
+          git lfs version
+
+      - name: Checkout repository and sample media
+        uses: actions/checkout@v4
+        with:
+          path: content-localization-${{ github.run_id }}-${{ github.run_attempt }}
+          lfs: true
+          persist-credentials: false
+
+      - name: Initialize report directories
+        if: always()
+        run: |
+          mkdir -p "$QA_REPORTS"/{cambai,elevenlabs}/{deploy,cli,teardown}
+          mkdir -p "$DOCKER_CONFIG"
+          chmod 700 "$DOCKER_CONFIG"
+
+      - name: Authenticate and pull the Blueprint QA image
+        id: pull
+        timeout-minutes: 15
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          : "${NGC_API_KEY:?Set the NGC_API_KEY repository secret}"
+          printf '%s' "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+          docker pull "$QA_IMAGE"
+
+      - name: Check runner GPU compatibility
+        run: |
+          # ARC's runner shell may lack NVIDIA tools; check the Docker GPU runtime
+          # that will also run the blueprint services.
+          gpu_names="$(docker run --rm --gpus all \
+            --env NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+            --entrypoint nvidia-smi "$QA_IMAGE" \
+            --query-gpu=name --format=csv,noheader)"
+          [[ -n "$gpu_names" ]] || { echo '::error::No NVIDIA GPU found'; exit 1; }
+          while IFS= read -r gpu; do
+            case "$gpu" in
+              *RTX*|*L40*) printf 'Compatible GPU: %s\n' "$gpu" ;;
+              *) echo "::error::Unsupported GPU: $gpu. Use RTX, L40, or L40S."; exit 1 ;;
+            esac
+          done <<< "$gpu_names"
+
+      - name: Start the Blueprint QA container
+        id: container
+        env:
+          LIPSYNC_API_KEY: ${{ secrets.LIPSYNC_API_KEY }}
+          ASD_API_KEY: ${{ secrets.ASD_API_KEY }}
+          CAMB_API_KEY: ${{ secrets.CAMB_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+        run: |
+          for key in LIPSYNC_API_KEY ASD_API_KEY CAMB_API_KEY ELEVENLABS_API_KEY; do
+            if [[ -z "${!key}" ]]; then
+              echo "::error::Set the $key repository secret"
+              exit 1
+            fi
+          done
+          # Use the host's Docker daemon. Identical checkout paths let Compose
+          # resolve relative bind mounts correctly when creating sibling services.
+          docker run --detach --name "$QA_CONTAINER" \
+            --network host --gpus all \
+            --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+            --mount "type=bind,src=$CONTENT_LOCALIZATION_REPO,dst=$CONTENT_LOCALIZATION_REPO" \
+            --mount "type=bind,src=$QA_REPORTS,dst=/app/reports" \
+            --mount "type=bind,src=$DOCKER_CONFIG,dst=/qa-docker-config,readonly" \
+            --env DOCKER_CONFIG=/qa-docker-config \
+            --env BUILDX_CONFIG=/tmp/blueprint-buildx \
+            --env POETRY_VIRTUALENVS_CREATE=true \
+            --env POETRY_VIRTUALENVS_IN_PROJECT=true \
+            --env POETRY_VIRTUALENVS_OPTIONS_SYSTEM_SITE_PACKAGES=true \
+            --env "COMPOSE_FILE=$CONTENT_LOCALIZATION_REPO/docker-compose.yml:/tmp/blueprint-qa-compose.yml" \
+            --env CONTENT_LOCALIZATION_REPO \
+            --env LIPSYNC_API_KEY --env ASD_API_KEY \
+            --env CAMB_API_KEY --env ELEVENLABS_API_KEY \
+            --env NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+            --workdir /app --entrypoint sleep "$QA_IMAGE" infinity
+
+      - name: Prepare Poetry test environment and blueprint client
+        id: setup
+        timeout-minutes: 20
+        run: |
+          # Use the same network for build downloads as the QA container.
+          # ARC's default build bridge stalled on Debian package downloads.
+          docker exec -i "$QA_CONTAINER" sh -c 'cat > /tmp/blueprint-qa-compose.yml' <<'YAML'
+          services:
+            speech-to-speech:
+              build:
+                network: host
+            controller:
+              build:
+                network: host
+            demo-app:
+              build:
+                network: host
+          YAML
+          # Fail promptly if the package mirror is unreachable from this runner.
+          docker exec -i "$QA_CONTAINER" python - <<'PY'
+          import urllib.request
+
+          for suite in ("debian/dists/bookworm", "debian-security/dists/bookworm-security"):
+              url = f"http://deb.debian.org/{suite}/InRelease"
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  data = response.read()
+              print(f"Package mirror reachable: {url} ({len(data)} bytes)", flush=True)
+          PY
+          docker exec "$QA_CONTAINER" bash -euo pipefail -c '
+            cd /app
+            # Follow the QA README while reusing dependencies bundled in the image,
+            # including packages from internal GitLab that GitHub cannot fetch.
+            poetry env use python3.12
+            poetry install --no-interaction --no-ansi
+            poetry run python -c "import pytest; print(pytest.__version__)"
+            # ffprobe validates the output videos; the base QA image may omit it.
+            if ! command -v ffprobe >/dev/null; then
+              apt-get update
+              apt-get install -y --no-install-recommends ffmpeg
+            fi
+            cd "$CONTENT_LOCALIZATION_REPO"
+            # Compose requires this file; secrets are inherited from the process.
+            touch .env
+            mkdir -p volumes/models/lipsync volumes/models/asd
+            chmod 777 volumes/models/lipsync volumes/models/asd
+            uv sync --frozen --python 3.12
+            export PATH="$CONTENT_LOCALIZATION_REPO/.venv/bin:$PATH"
+            bash protos/generate_protos.sh
+          '
+          # Bound pytest inside the container too: timing out docker exec alone
+          # would leave pytest running against the stack in the background.
+          docker exec -i "$QA_CONTAINER" bash -c 'cat > /usr/local/bin/pytest_runner; chmod +x /usr/local/bin/pytest_runner' <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          profile="$1"
+          phase="$2"
+          shift 2
+          limit=75m
+          [[ "$phase" != teardown ]] || limit=10m
+          timeout --signal=TERM --kill-after=30s "$limit" \
+            poetry run python -m pytest "$@" \
+            --content-localization-repo="$CONTENT_LOCALIZATION_REPO" \
+            --reports-dir="/app/reports/$profile/$phase" \
+            --disable-warnings
+          SCRIPT
+
+      - name: Deploy CambAI
+        id: cambai_deploy
+        continue-on-error: true
+        timeout-minutes: 80
+        run: |
+          docker exec "$QA_CONTAINER" pytest_runner cambai deploy \
+            testcases/content_localization/test_content_localization_deployment.py \
+            -m T6195932 --content-localization-keep-stack
+
+      - name: Run CambAI CLI tests
+        id: cambai_cli
+        if: ${{ !cancelled() && steps.cambai_deploy.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 80
+        run: |
+          docker exec "$QA_CONTAINER" pytest_runner cambai cli \
+            testcases/content_localization/test_content_localization_cli.py \
+            --content-localization-keep-stack
+
+      - name: Tear down CambAI
+        id: cambai_teardown
+        if: always() && steps.cambai_deploy.outcome != 'skipped' && steps.setup.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          docker exec "$QA_CONTAINER" pytest_runner cambai teardown \
+            testcases/content_localization/test_content_localization_deployment.py \
+            -m T6195933
+
+      - name: Deploy ElevenLabs
+        id: elevenlabs_deploy
+        # A failed deploy/CLI test must not suppress the other provider. Require
+        # a clean teardown before reusing the blueprint's fixed ports and names.
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.cambai_teardown.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 80
+        run: |
+          docker exec "$QA_CONTAINER" pytest_runner elevenlabs deploy \
+            testcases/content_localization/test_content_localization_deployment.py \
+            -m T6195931 --content-localization-keep-stack
+
+      - name: Run ElevenLabs CLI tests
+        id: elevenlabs_cli
+        if: ${{ !cancelled() && steps.elevenlabs_deploy.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 80
+        run: |
+          docker exec "$QA_CONTAINER" pytest_runner elevenlabs cli \
+            testcases/content_localization/test_content_localization_cli.py \
+            --content-localization-keep-stack
+
+      - name: Tear down ElevenLabs
+        id: elevenlabs_teardown
+        if: always() && steps.elevenlabs_deploy.outcome != 'skipped' && steps.setup.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          docker exec "$QA_CONTAINER" pytest_runner elevenlabs teardown \
+            testcases/content_localization/test_content_localization_deployment.py \
+            -m T6195933
+
+      - name: Aggregate both profiles and all test phases
+        id: aggregate
+        if: always() && steps.container.outcome == 'success'
+        timeout-minutes: 5
+        run: |
+          # Failed deployment or setup can leave phases without a report.
+          # Aggregate the available results; the summary records skipped phases.
+          docker exec -i "$QA_CONTAINER" poetry run python - <<'PY'
+          from pathlib import Path
+          from utils.reporting.devtest_report import aggregate_folders
+
+          root = Path('/app/reports')
+          folders = [
+              root / profile / phase
+              for profile in ('cambai', 'elevenlabs')
+              for phase in ('deploy', 'cli', 'teardown')
+              if any((root / profile / phase / name).is_file()
+                     for name in ('pytest.json', 'devtest.json'))
+          ]
+          rows = aggregate_folders(folders, root, title='Content Localization Blueprint QA')
+          print(f'Aggregated {len(rows)} test results from {len(folders)} phase reports')
+          PY
+          docker exec "$QA_CONTAINER" chmod -R a+rX /app/reports
+
+      - name: Summarize test outcomes and preserve failures
+        id: summary
+        if: always()
+        env:
+          CAMBAI_DEPLOY: ${{ steps.cambai_deploy.outcome }}
+          CAMBAI_CLI: ${{ steps.cambai_cli.outcome }}
+          CAMBAI_TEARDOWN: ${{ steps.cambai_teardown.outcome }}
+          ELEVENLABS_DEPLOY: ${{ steps.elevenlabs_deploy.outcome }}
+          ELEVENLABS_CLI: ${{ steps.elevenlabs_cli.outcome }}
+          ELEVENLABS_TEARDOWN: ${{ steps.elevenlabs_teardown.outcome }}
+          AGGREGATE: ${{ steps.aggregate.outcome }}
+        run: |
+          mkdir -p "$QA_REPORTS"
+          result=0
+          {
+            echo '# Content Localization Blueprint QA'
+            echo
+            echo '| Phase | Outcome |'
+            echo '| --- | --- |'
+            for phase in CAMBAI_DEPLOY CAMBAI_CLI CAMBAI_TEARDOWN ELEVENLABS_DEPLOY ELEVENLABS_CLI ELEVENLABS_TEARDOWN AGGREGATE; do
+              printf '| %s | %s |\n' "$phase" "${!phase}"
+              [[ "${!phase}" == success ]] || result=1
+            done
+          } > "$QA_REPORTS/summary.md"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from collections import Counter
+          from pathlib import Path
+
+          reports = Path(os.environ['QA_REPORTS'])
+          results = reports / 'devtest.json'
+          rows = json.loads(results.read_text()) if results.is_file() else []
+          counts = Counter(row.get('result', 'unknown') for row in rows)
+          test_counts = {
+              'passed': counts['passed'],
+              'failed': counts['failed'] + counts['error'],
+              'skipped': counts['skipped'] + counts['xfailed'],
+              'available': results.is_file(),
+          }
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'test_counts={json.dumps(test_counts)}\n')
+          report = reports / 'devtest.html'
+          if report.is_file():
+              # GitHub renders the report body; standalone document CSS stays in the artifact.
+              document = report.read_text()
+              match = re.search(r'<body[^>]*>(.*?)</body>', document, re.DOTALL | re.IGNORECASE)
+              if not match:
+                  raise ValueError('devtest.html has no report body')
+              summary = match.group(1).strip() + '\n'
+          else:
+              summary = 'DevTest report unavailable. Workflow phase outcomes:\n\n'
+              summary += (reports / 'summary.md').read_text()
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write(summary)
+          PY
+          exit "$result"
+
+      - name: Upload aggregated results and individual reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blueprint-qa-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.QA_REPORTS }}
+            ${{ env.INCLUDE_OUTPUT_VIDEOS != 'true' && format('!{0}/**/*.mp4', env.QA_REPORTS) || '' }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Clean up workflow resources
+        if: always()
+        timeout-minutes: 10
+        run: |
+          cleanup_result=0
+          # Stop the QA container first so an interrupted test cannot create
+          # services while cleanup is running. Filter every resource by this run.
+          if docker container inspect "$QA_CONTAINER" >/dev/null 2>&1; then
+            docker rm -f "$QA_CONTAINER" || cleanup_result=1
+          fi
+          project="${CONTENT_LOCALIZATION_REPO##*/}"
+          label="label=com.docker.compose.project=$project"
+          docker ps -aq --filter "$label" | xargs -r docker rm -f || cleanup_result=1
+          docker network ls -q --filter "$label" | xargs -r docker network rm || cleanup_result=1
+          docker volume ls -q --filter "$label" | xargs -r docker volume rm || cleanup_result=1
+          if [[ -d "$CONTENT_LOCALIZATION_REPO" ]] && docker image inspect "$QA_IMAGE" >/dev/null 2>&1; then
+            # Bind-mounted model caches are directories, not Docker volumes.
+            # Remove them after the upload and restore ownership on runner files.
+            docker run --rm --pull=never --entrypoint bash \
+              --mount "type=bind,src=$CONTENT_LOCALIZATION_REPO,dst=/cleanup" \
+              --mount "type=bind,src=$QA_REPORTS,dst=/reports" \
+              "$QA_IMAGE" -euo pipefail -c '
+                rm -rf /cleanup/volumes /cleanup/.venv
+                chown -R "$1:$2" /cleanup /reports
+              ' bash "$(id -u)" "$(id -g)" || cleanup_result=1
+          fi
+          # No global Docker prune: other workflows may share the image cache.
+          rm -rf "$DOCKER_CONFIG"
+          exit "$cleanup_result"
+
+  notify-slack:
+    # Wait for teardown, artifact upload, cleanup, and checkout's post action.
+    needs: blueprint-qa
+    if: >-
+      always() && vars.BLUEPRINT_QA_DISABLE_SLACK != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Send QA result to Slack
+        timeout-minutes: 2
+        env:
+          SLACK_BOT_OAUTH_TOKEN: ${{ secrets.SLACK_BOT_OAUTH_TOKEN }}
+          SLACK_CHANNEL: ${{ inputs.slack_channel || vars.BLUEPRINT_QA_SLACK_CHANNEL || '#vrdc-bpqa-monitoring' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          QA_JOB_STATUS: ${{ needs.blueprint-qa.result }}
+          QA_TEST_COUNTS: ${{ needs.blueprint-qa.outputs.test_counts }}
+          TEST_BRANCH: ${{ github.head_ref || github.ref_name }}
+          TEST_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 - <<'PY'
+          import html
+          import json
+          import os
+          import urllib.request
+          from datetime import datetime
+
+          counts = json.loads(os.environ['QA_TEST_COUNTS'] or '{}')
+          passed = counts.get('passed', 0)
+          failed = counts.get('failed', 0)
+          skipped = counts.get('skipped', 0)
+          status = os.environ['QA_JOB_STATUS']
+          if status == 'success':
+              if failed:
+                  status = 'failure'
+              elif not passed:
+                  status = 'skipped'
+          # Use explicit border colors for Block Kit attachments: green, red, or amber.
+          color = {'success': '#36a64f', 'failure': '#a30200'}.get(status, '#daa038')
+          repository = os.environ['GITHUB_REPOSITORY']
+          branch = os.environ['TEST_BRANCH']
+          commit = os.environ['TEST_COMMIT']
+          repo_url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}"
+          run_url = f"{repo_url}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+
+          def github_api(path):
+              request = urllib.request.Request(
+                  f"{os.environ['GITHUB_API_URL']}/repos/{repository}{path}",
+                  headers={
+                      'Authorization': f"Bearer {os.environ['GITHUB_TOKEN']}",
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          # GitHub records these timestamps after the QA job and all post actions finish.
+          jobs = github_api(f"/actions/runs/{os.environ['GITHUB_RUN_ID']}/jobs?per_page=100")['jobs']
+          qa_job = next((job for job in jobs if job['name'] == 'blueprint-qa'), {})
+          duration = 'Unavailable'
+          if qa_job.get('started_at') and qa_job.get('completed_at'):
+              started = datetime.fromisoformat(qa_job['started_at'].replace('Z', '+00:00'))
+              completed = datetime.fromisoformat(qa_job['completed_at'].replace('Z', '+00:00'))
+              elapsed = max(0, int((completed - started).total_seconds()))
+              minutes, seconds = divmod(elapsed, 60)
+              hours, minutes = divmod(minutes, 60)
+              duration = f'{minutes}m {seconds:02d}s'
+              if hours:
+                  duration = f'{hours}h {minutes:02d}m {seconds:02d}s'
+          author = github_api(f'/commits/{commit}')['commit']['author']['name']
+          # Escape user-controlled metadata so it cannot create Slack mentions or links.
+          def escape(value):
+              return html.escape(str(value), quote=False)
+
+          totals = f'{passed} passed / {failed} failed / {skipped} skipped'
+          fields = [
+              ('Repository', escape(repository)),
+              ('Revision', f'{escape(branch)} (<{repo_url}/commit/{commit}|{commit[:12]}>)'),
+              ('Duration', duration),
+              ('Author', escape(author)),
+              ('Test status', status.upper()),
+              ('Test results', totals),
+          ]
+          blocks = [{
+              'type': 'section',
+              'fields': [{'type': 'mrkdwn', 'text': f'*{title}*\n{value}'} for title, value in fields],
+          }]
+          if not counts.get('available'):
+              blocks.append({
+                  'type': 'context',
+                  'elements': [{'type': 'mrkdwn', 'text':
+                      'No DevTest report was generated; counts only cover recorded tests.'}],
+              })
+          blocks.append({
+              'type': 'context',
+              'elements': [{'type': 'mrkdwn', 'text': f'<{run_url}|View run, DevTest reports, and artifacts>'}],
+          })
+          payload = {
+              'channel': os.environ['SLACK_CHANNEL'],
+              'attachments': [{
+                  'color': color,
+                  'fallback': f'{repository} {branch} ({commit[:12]}) by {author}: {status}; {totals}; {duration}. {run_url}',
+                  'blocks': blocks,
+              }],
+              'unfurl_links': False,
+              'unfurl_media': False,
+          }
+          token = os.environ['SLACK_BOT_OAUTH_TOKEN']
+          if not token:
+              raise RuntimeError('Set the SLACK_BOT_OAUTH_TOKEN repository secret')
+          request = urllib.request.Request(
+              'https://slack.com/api/chat.postMessage',
+              data=json.dumps(payload).encode(),
+              headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json; charset=utf-8'},
+              method='POST',
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              result = json.load(response)
+          if not result.get('ok'):
+              raise RuntimeError(f"Slack notification failed: {result.get('error', 'unknown_error')}")
+          print(f"Slack notification sent to {result['channel']} (message {result['ts']})")
+          PY
